@@ -10,6 +10,7 @@ pub mod common;
 pub mod context;
 mod env;
 pub mod parser;
+pub mod vm;
 
 pub use common::ast::IdedExpr;
 use common::ast::SelectExpr;
@@ -177,6 +178,19 @@ impl Program {
 
     pub fn execute(&self, context: &Context) -> ResolveResult {
         Value::resolve(&self.expression, context)
+    }
+
+    pub fn compile_vm(&self) -> Result<vm::Program, String> {
+        vm::compile(&self.expression)
+    }
+
+    pub fn execute_vm(&self, context: &Context) -> ResolveResult {
+        let program = self.compile_vm().map_err(|e| {
+            ExecutionError::InternalError(format!("VM compile error: {}", e))
+        })?;
+        vm::eval(&program, context)
+            .map(|v| Ok(v))
+            .unwrap_or_else(Err)
     }
 
     /// Returns the variables and functions referenced by the CEL program
