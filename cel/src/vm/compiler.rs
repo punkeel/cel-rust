@@ -1,9 +1,14 @@
+use crate::common::ast;
 use crate::common::ast::operators;
 use crate::common::ast::{ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue};
 use crate::objects::Value;
 use crate::vm::bytecode::{Instr, Program, IDX_ACCU, IDX_ITER_ELEM};
+use crate::vm::vm::{
+    try_bool, vm_add, vm_div, vm_eq, vm_in, vm_index, vm_le, vm_logical_and, vm_logical_or, vm_lt,
+    vm_mod, vm_mul, vm_neg, vm_sub,
+};
 use crate::Expression;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub fn compile(expr: &Expression) -> Result<Program, String> {
     let mut c = Compiler::new();
@@ -13,6 +18,7 @@ pub fn compile(expr: &Expression) -> Result<Program, String> {
         constants: c.constants,
         var_names: c.var_names.into_iter().collect(),
         instructions: c.instructions,
+        var_cache: std::sync::Mutex::new(vec![None; c.var_map.len()]),
     })
 }
 
@@ -147,6 +153,13 @@ impl Compiler {
 
         // Binary ops
         if call.args.len() == 2 {
+            if let (Some(a), Some(b)) = (expr_to_value(&call.args[0].expr), expr_to_value(&call.args[1].expr)) {
+                if let Some(v) = fold_binary(name, a, b) {
+                    let idx = self.add_const(v);
+                    self.emit(Instr::PushConst(idx));
+                    return Ok(());
+                }
+            }
             match name {
                 operators::ADD => {
                     self.compile_expr(&call.args[0].expr)?;
@@ -248,6 +261,13 @@ impl Compiler {
 
         // Unary ops
         if call.args.len() == 1 {
+            if let Some(a) = expr_to_value(&call.args[0].expr) {
+                if let Some(v) = fold_unary(name, a) {
+                    let idx = self.add_const(v);
+                    self.emit(Instr::PushConst(idx));
+                    return Ok(());
+                }
+            }
             match name {
                 operators::LOGICAL_NOT => {
                     self.compile_expr(&call.args[0].expr)?;
@@ -286,6 +306,7 @@ impl Compiler {
             "uint" => 3,
             "string" => 4,
             "max" => 5,
+            "@not_strictly_false" => 6,
             _ => return Err(format!("unsupported function: {}", name)),
         };
         let argc = call.args.len() as u16;
@@ -294,12 +315,43 @@ impl Compiler {
     }
 
     fn compile_select(&mut self, sel: &crate::common::ast::SelectExpr) -> Result<(), String> {
-        self.compile_expr(&sel.operand.expr)?;
         let field_idx = self.add_string_const(&sel.field);
-        if sel.test {
-            self.emit(Instr::HasField(field_idx));
-        } else {
-            self.emit(Instr::Select(field_idx));
+        match &sel.operand.expr {
+            Expr::Ident(name) => {
+                if let Some(binding) = self.lookup_comp_var(name) {
+                    match binding {
+                        CompBinding::Iter => {
+                            if sel.test {
+                                self.emit(Instr::LoadVarHasField(IDX_ITER_ELEM, field_idx));
+                            } else {
+                                self.emit(Instr::LoadVarSelect(IDX_ITER_ELEM, field_idx));
+                            }
+                        }
+                        CompBinding::Accu => {
+                            if sel.test {
+                                self.emit(Instr::LoadVarHasField(IDX_ACCU, field_idx));
+                            } else {
+                                self.emit(Instr::LoadVarSelect(IDX_ACCU, field_idx));
+                            }
+                        }
+                    }
+                } else {
+                    let var_idx = self.ensure_var(name);
+                    if sel.test {
+                        self.emit(Instr::LoadVarHasField(var_idx, field_idx));
+                    } else {
+                        self.emit(Instr::LoadVarSelect(var_idx, field_idx));
+                    }
+                }
+            }
+            _ => {
+                self.compile_expr(&sel.operand.expr)?;
+                if sel.test {
+                    self.emit(Instr::HasField(field_idx));
+                } else {
+                    self.emit(Instr::Select(field_idx));
+                }
+            }
         }
         Ok(())
     }
@@ -381,4 +433,42 @@ fn lit_to_value(lit: &LiteralValue) -> Value {
         LiteralValue::Bytes(b) => Value::Bytes(std::sync::Arc::new(b.inner().to_vec())),
         LiteralValue::Null => Value::Null,
     }
+}
+
+fn expr_to_value(expr: &Expr) -> Option<Value> {
+    match expr {
+        Expr::Literal(lit) => Some(lit_to_value(lit)),
+        _ => None,
+    }
+}
+
+fn fold_binary(name: &str, a: Value, b: Value) -> Option<Value> {
+    let res = match name {
+        operators::ADD => vm_add(a, b).ok()?,
+        operators::SUBSTRACT => vm_sub(a, b).ok()?,
+        operators::MULTIPLY => vm_mul(a, b).ok()?,
+        operators::DIVIDE => vm_div(a, b).ok()?,
+        operators::MODULO => vm_mod(a, b).ok()?,
+        operators::EQUALS => Value::Bool(vm_eq(&a, &b)),
+        operators::NOT_EQUALS => Value::Bool(!vm_eq(&a, &b)),
+        operators::LESS => Value::Bool(vm_lt(&a, &b).ok()?),
+        operators::LESS_EQUALS => Value::Bool(vm_le(&a, &b).ok()?),
+        operators::GREATER => Value::Bool(vm_lt(&b, &a).ok()?),
+        operators::GREATER_EQUALS => Value::Bool(vm_le(&b, &a).ok()?),
+        operators::LOGICAL_AND => vm_logical_and(a, b),
+        operators::LOGICAL_OR => vm_logical_or(a, b),
+        operators::IN => vm_in(a, b).ok()?,
+        operators::INDEX => vm_index(a, b).ok()?,
+        _ => return None,
+    };
+    Some(res)
+}
+
+fn fold_unary(name: &str, a: Value) -> Option<Value> {
+    let res = match name {
+        operators::LOGICAL_NOT => Value::Bool(!try_bool(a).ok()?),
+        operators::NEGATE => vm_neg(a).ok()?,
+        _ => return None,
+    };
+    Some(res)
 }

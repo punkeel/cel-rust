@@ -1,5 +1,5 @@
 use crate::context::Context;
-use crate::objects::{Key, Map, Value};
+use crate::objects::{AsKeyRef, Key, KeyRef, Map, Value};
 use crate::vm::bytecode::{Instr, Program, IDX_ACCU, IDX_ITER_ELEM};
 use crate::ExecutionError;
 use std::sync::Arc;
@@ -16,18 +16,12 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
     let mut iter_elem = Value::Null;
     let mut iter_stack: Vec<IterFrame> = Vec::new();
 
-    let vars: Vec<Value> = program
-        .var_names
-        .iter()
-        .map(|name| {
-            ctx.get_variable(name)
-                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                .unwrap_or(Value::Null)
-        })
-        .collect();
+    let mut vars = program.var_cache.lock().unwrap();
 
     loop {
-        let instr = &program.instructions[pc];
+        // SAFETY: pc is always advanced by valid jump offsets or by +1,
+        // and all jump targets are patched by the compiler to valid indices.
+        let instr = unsafe { program.instructions.get_unchecked(pc) };
         pc += 1;
         match instr {
             Instr::Halt | Instr::Return => {
@@ -39,7 +33,21 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
             Instr::LoadVar(idx) => match *idx {
                 IDX_ITER_ELEM => stack.push(iter_elem.clone()),
                 IDX_ACCU => stack.push(accu.clone()),
-                n => stack.push(vars.get(n as usize).cloned().unwrap_or(Value::Null)),
+                n => {
+                    let slot = n as usize;
+                    let val = if let Some(ref v) = vars[slot] {
+                        v.clone()
+                    } else {
+                        let name = &program.var_names[slot];
+                        let v = ctx
+                            .get_variable(name)
+                            .and_then(|cow| Value::try_from(cow.as_ref()).ok())
+                            .unwrap_or(Value::Null);
+                        vars[slot] = Some(v.clone());
+                        v
+                    };
+                    stack.push(val);
+                }
             },
             Instr::Pop => {
                 stack.pop();
@@ -180,18 +188,66 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
             }
 
             // Fields
+            Instr::LoadVarSelect(var_idx, field_idx) => {
+                let obj = match *var_idx {
+                    IDX_ITER_ELEM => iter_elem.clone(),
+                    IDX_ACCU => accu.clone(),
+                    n => {
+                        let slot = n as usize;
+                        if let Some(ref v) = vars[slot] {
+                            v.clone()
+                        } else {
+                            let name = &program.var_names[slot];
+                            let v = ctx
+                                .get_variable(name)
+                                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
+                                .unwrap_or(Value::Null);
+                            vars[slot] = Some(v.clone());
+                            v
+                        }
+                    }
+                };
+                let field = match &program.constants[*field_idx as usize] {
+                    Value::String(s) => s,
+                    _ => return Err(ExecutionError::InternalError("select non-string".into())),
+                };
+                stack.push(vm_select(&obj, field)?);
+            }
+            Instr::LoadVarHasField(var_idx, field_idx) => {
+                let obj = match *var_idx {
+                    IDX_ITER_ELEM => &iter_elem,
+                    IDX_ACCU => &accu,
+                    n => {
+                        let slot = n as usize;
+                        if vars[slot].is_none() {
+                            let name = &program.var_names[slot];
+                            let v = ctx
+                                .get_variable(name)
+                                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
+                                .unwrap_or(Value::Null);
+                            vars[slot] = Some(v);
+                        }
+                        vars[slot].as_ref().unwrap()
+                    }
+                };
+                let field = match &program.constants[*field_idx as usize] {
+                    Value::String(s) => s,
+                    _ => return Err(ExecutionError::InternalError("has_field non-string".into())),
+                };
+                stack.push(Value::Bool(vm_has_field(obj, field)));
+            }
             Instr::Select(idx) => {
                 let obj = stack.pop().unwrap();
                 let field = match &program.constants[*idx as usize] {
-                    Value::String(s) => s.as_str(),
+                    Value::String(s) => s,
                     _ => return Err(ExecutionError::InternalError("select non-string".into())),
                 };
-                stack.push(vm_select(obj, field)?);
+                stack.push(vm_select(&obj, field)?);
             }
             Instr::HasField(idx) => {
                 let obj = stack.pop().unwrap();
                 let field = match &program.constants[*idx as usize] {
-                    Value::String(s) => s.as_str(),
+                    Value::String(s) => s,
                     _ => return Err(ExecutionError::InternalError("has_field non-string".into())),
                 };
                 stack.push(Value::Bool(vm_has_field(&obj, field)));
@@ -253,14 +309,16 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
 
 // ---- Runtime helpers --------------------------------------------------------
 
-fn try_bool(v: Value) -> Result<bool, ExecutionError> {
+#[inline(always)]
+pub(super) fn try_bool(v: Value) -> Result<bool, ExecutionError> {
     match v {
         Value::Bool(b) => Ok(b),
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }
 
-fn vm_add(a: Value, b: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_add(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_add(b))),
         (Value::UInt(a), Value::UInt(b)) => Ok(Value::UInt(a.wrapping_add(b))),
@@ -278,7 +336,8 @@ fn vm_add(a: Value, b: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_sub(a: Value, b: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_sub(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_sub(b))),
         (Value::UInt(a), Value::UInt(b)) => Ok(Value::UInt(a.wrapping_sub(b))),
@@ -287,7 +346,8 @@ fn vm_sub(a: Value, b: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_mul(a: Value, b: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_mul(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_mul(b))),
         (Value::UInt(a), Value::UInt(b)) => Ok(Value::UInt(a.wrapping_mul(b))),
@@ -296,7 +356,8 @@ fn vm_mul(a: Value, b: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_div(a: Value, b: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_div(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => {
             if b == 0 {
@@ -315,7 +376,8 @@ fn vm_div(a: Value, b: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_mod(a: Value, b: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_mod(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => {
             if b == 0 {
@@ -333,7 +395,8 @@ fn vm_mod(a: Value, b: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_neg(a: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_neg(a: Value) -> Result<Value, ExecutionError> {
     match a {
         Value::Int(a) => Ok(Value::Int(-a)),
         Value::Float(a) => Ok(Value::Float(-a)),
@@ -341,7 +404,8 @@ fn vm_neg(a: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_eq(a: &Value, b: &Value) -> bool {
+#[inline(always)]
+pub(super) fn vm_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -360,7 +424,8 @@ fn vm_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn vm_lt(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_lt(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(a < b),
         (Value::UInt(a), Value::UInt(b)) => Ok(a < b),
@@ -375,7 +440,8 @@ fn vm_lt(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
     }
 }
 
-fn vm_le(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_le(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(a <= b),
         (Value::UInt(a), Value::UInt(b)) => Ok(a <= b),
@@ -390,7 +456,8 @@ fn vm_le(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
     }
 }
 
-fn vm_in(val: Value, container: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_in(val: Value, container: Value) -> Result<Value, ExecutionError> {
     match container {
         Value::List(list) => {
             for item in list.iter() {
@@ -408,7 +475,8 @@ fn vm_in(val: Value, container: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_logical_and(lhs: Value, rhs: Value) -> Value {
+#[inline(always)]
+pub(super) fn vm_logical_and(lhs: Value, rhs: Value) -> Value {
     match (lhs, rhs) {
         (Value::Bool(false), _) | (_, Value::Bool(false)) => Value::Bool(false),
         (Value::Bool(true), Value::Bool(true)) => Value::Bool(true),
@@ -417,7 +485,8 @@ fn vm_logical_and(lhs: Value, rhs: Value) -> Value {
     }
 }
 
-fn vm_logical_or(lhs: Value, rhs: Value) -> Value {
+#[inline(always)]
+pub(super) fn vm_logical_or(lhs: Value, rhs: Value) -> Value {
     match (lhs, rhs) {
         (Value::Bool(true), _) | (_, Value::Bool(true)) => Value::Bool(true),
         (Value::Bool(false), Value::Bool(false)) => Value::Bool(false),
@@ -426,7 +495,8 @@ fn vm_logical_or(lhs: Value, rhs: Value) -> Value {
     }
 }
 
-fn vm_index(obj: Value, idx: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_index(obj: Value, idx: Value) -> Result<Value, ExecutionError> {
     match obj {
         Value::List(list) => {
             let i = match idx {
@@ -459,29 +529,47 @@ fn vm_index(obj: Value, idx: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn vm_select(obj: Value, field: &str) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_select(obj: &Value, field: &Arc<String>) -> Result<Value, ExecutionError> {
     match obj {
         Value::Map(map) => {
-            let key = Key::String(Arc::new(field.to_string()));
-            map.get(&key)
+            let f = field.as_str();
+            if map.map.len() <= 8 {
+                for (k, v) in map.map.iter() {
+                    if k.as_keyref() == KeyRef::String(f) {
+                        return Ok(v.clone());
+                    }
+                }
+                return Err(ExecutionError::no_such_key(f));
+            }
+            map.get(&KeyRef::String(f))
                 .cloned()
-                .ok_or_else(|| ExecutionError::no_such_key(field))
+                .ok_or_else(|| ExecutionError::no_such_key(f))
         }
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }
 
-fn vm_has_field(obj: &Value, field: &str) -> bool {
+pub(super) fn vm_has_field(obj: &Value, field: &Arc<String>) -> bool {
     match obj {
         Value::Map(map) => {
-            let key = Key::String(Arc::new(field.to_string()));
-            map.map.contains_key(&key)
+            let f = field.as_str();
+            if map.map.len() <= 8 {
+                for (k, _) in map.map.iter() {
+                    if k.as_keyref() == KeyRef::String(f) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            map.get(&KeyRef::String(f)).is_some()
         }
         _ => false,
     }
 }
 
-fn vm_size(a: Value) -> Result<Value, ExecutionError> {
+#[inline(always)]
+pub(super) fn vm_size(a: Value) -> Result<Value, ExecutionError> {
     match a {
         Value::String(s) => Ok(Value::Int(s.chars().count() as i64)),
         Value::List(l) => Ok(Value::Int(l.len() as i64)),
@@ -491,7 +579,8 @@ fn vm_size(a: Value) -> Result<Value, ExecutionError> {
     }
 }
 
-fn value_to_key(v: Value) -> Result<Key, ExecutionError> {
+#[inline(always)]
+pub(super) fn value_to_key(v: Value) -> Result<Key, ExecutionError> {
     match v {
         Value::Int(i) => Ok(Key::Int(i)),
         Value::UInt(u) => Ok(Key::Uint(u)),
@@ -501,7 +590,8 @@ fn value_to_key(v: Value) -> Result<Key, ExecutionError> {
     }
 }
 
-fn key_to_value(k: Key) -> Value {
+#[inline(always)]
+pub(super) fn key_to_value(k: Key) -> Value {
     match k {
         Key::Int(i) => Value::Int(i),
         Key::Uint(u) => Value::UInt(u),
@@ -580,6 +670,12 @@ fn vm_call(builtin_id: u16, args: &[Value], _ctx: &Context) -> Result<Value, Exe
                 }
             }
             Ok(max)
+        }
+        6 => {
+            if args.len() != 1 {
+                return Err(ExecutionError::invalid_argument_count(1, args.len()));
+            }
+            Ok(Value::Bool(try_bool(args[0].clone()).unwrap_or(true)))
         }
         _ => Err(ExecutionError::undeclared_reference("unknown builtin")),
     }

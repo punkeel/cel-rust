@@ -1,4 +1,5 @@
 use crate::objects::Value;
+use std::sync::Mutex;
 
 /// A bytecode instruction.
 /// Operands are stored inline; multi-operand instructions use wide encoding.
@@ -41,8 +42,10 @@ pub enum Instr {
     BuildMap(u16),
 
     // Fields
-    Select(u16),   // field name index in const pool
-    HasField(u16), // field name index in const pool
+    Select(u16),       // field name index in const pool
+    HasField(u16),     // field name index in const pool
+    LoadVarSelect(u16, u16), // (var_idx, field_idx)  fused LoadVar+Select
+    LoadVarHasField(u16, u16), // (var_idx, field_idx) fused LoadVar+HasField
 
     // Calls
     Call(u16, u16), // (builtin_id, argc)
@@ -61,9 +64,31 @@ pub const IDX_ITER_ELEM: u16 = 0xFFFE;
 pub const IDX_ACCU: u16 = 0xFFFF;
 
 /// A compiled program for the VM.
-#[derive(Clone, Debug)]
 pub struct Program {
     pub constants: Vec<Value>,
     pub var_names: Vec<String>,
     pub instructions: Vec<Instr>,
+    /// Cached variable values resolved from context to avoid repeated conversions.
+    pub var_cache: Mutex<Vec<Option<Value>>>,
+}
+
+impl Clone for Program {
+    fn clone(&self) -> Self {
+        Self {
+            constants: self.constants.clone(),
+            var_names: self.var_names.clone(),
+            instructions: self.instructions.clone(),
+            var_cache: Mutex::new(vec![None; self.var_names.len()]),
+        }
+    }
+}
+
+impl std::fmt::Debug for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Program")
+            .field("instructions", &self.instructions)
+            .field("constants", &self.constants)
+            .field("var_names", &self.var_names)
+            .finish()
+    }
 }
