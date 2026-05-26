@@ -136,6 +136,46 @@ impl Compiler {
         false
     }
 
+    fn try_emit_in_as_or_chain(&mut self, needle: &Expr, haystack: &Expr) -> bool {
+        let list = match haystack {
+            Expr::List(list) => &list.elements,
+            _ => return false,
+        };
+        if list.is_empty() {
+            let idx = self.add_const(Value::Bool(false));
+            self.emit(Instr::PushConst(idx));
+            return true;
+        }
+        // compile: needle == lit0 || needle == lit1 || ...
+        // short-circuit with JumpIfTrueKeep
+        let mut jumps = Vec::new();
+        for (i, elem) in list.iter().enumerate() {
+            if i > 0 {
+                // After a false comparison, pop it so stack is clean for next iteration.
+                self.emit(Instr::Pop);
+            }
+            let emitted_cmp = self.try_emit_var_const_cmp(needle, &elem.expr, operators::EQUALS);
+            if !emitted_cmp {
+                // fallback: compile normal equality
+                if self.compile_expr(needle).is_err() {
+                    return false;
+                }
+                if self.compile_expr(&elem.expr).is_err() {
+                    return false;
+                }
+                self.emit(Instr::Eq);
+            }
+            if i < list.len() - 1 {
+                // If true, jump to end (keep true on stack)
+                jumps.push(self.emit_jump(Instr::JumpIfTrueKeep));
+            }
+        }
+        for jump in jumps {
+            self.patch_jump(jump, self.instructions.len());
+        }
+        true
+    }
+
     fn emit(&mut self, instr: Instr) -> usize {
         self.instructions.push(instr);
         self.instructions.len() - 1
@@ -324,6 +364,9 @@ impl Compiler {
                     return Ok(());
                 }
                 operators::IN => {
+                    if self.try_emit_in_as_or_chain(&call.args[0].expr, &call.args[1].expr) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::In);
