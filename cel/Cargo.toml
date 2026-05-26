@@ -27,6 +27,7 @@ pastey = "0.2.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 serde_bytes = "0.11.14"
 dhat = { version = "0.3.3" }
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter.git" }
 
 [[bench]]
 name = "runtime"
@@ -34,6 +35,10 @@ harness = false
 
 [[bench]]
 name = "vm_compare"
+harness = false
+
+[[bench]]
+name = "wirefilter_compare"
 harness = false
 
 [features]

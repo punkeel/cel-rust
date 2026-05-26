@@ -4,7 +4,7 @@ use crate::vm::bytecode::{Instr, Program, IDX_ACCU, IDX_ITER_ELEM};
 use crate::ExecutionError;
 use std::sync::Arc;
 
-pub(crate) struct IterFrame {
+pub struct IterFrame {
     items: Arc<Vec<Value>>,
     idx: usize,
 }

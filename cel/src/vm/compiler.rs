@@ -1,6 +1,5 @@
-use crate::common::ast;
 use crate::common::ast::operators;
-use crate::common::ast::{ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue};
+use crate::common::ast::{ComprehensionExpr, EntryExpr, Expr, LiteralValue};
 use crate::objects::Value;
 use crate::vm::bytecode::{Instr, Program, IDX_ACCU, IDX_ITER_ELEM};
 use crate::vm::vm::{
