@@ -9,7 +9,7 @@
 use cel::context::Context;
 use cel::fast::{EvalContext, FieldType, Filter, Schema};
 use cel::objects::Value;
-use cel::vm::filter_tree::{BoolFilter, EqIntConst, EqStrConst, GeIntConst, InIntLinearSet, LeIntConst};
+use cel::vm::filter_tree::FilterNode;
 use cel::Program;
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,8 +30,6 @@ fn median_ns<F: FnMut()>(name: &str, label: &str, mut f: F) -> f64 {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = times.len() / 2;
     let ns = if times.len() % 2 == 0 { (times[mid-1] + times[mid]) / 2.0 } else { times[mid] };
-    // comment out individual lines to keep output clean
-    // println!("  {:28} {:8.1} ns", format!("{} ({})", name, label), ns);
     ns
 }
 
@@ -60,26 +58,11 @@ fn main() {
         median_ns(expr, "Wirefilter", || { std::hint::black_box(f.execute(&ctx).unwrap()); })
     }
 
-    // ── Helper: cel::fast benchmark in two modes ──
-    struct FastBench {
-        t_eval: f64,  // set once, eval many (like wirefilter)
-        t_all: f64,   // set + eval each iteration
-    }
-
-    fn bench_fast(setup: impl Fn(&mut Schema, &mut EvalContext, &mut Filter), label: &str) -> FastBench {
-        let mut s = Schema::new();
-        let mut ctx = EvalContext::new(&s);
-        let f = Filter::compile("port == 0", &s).unwrap(); // placeholder
-        // The setup closure receives mutable refs and sets up schema/ctx/filter
-        // We can't pass filter by ref easily, so we do it inline at each callsite.
-        todo!()
-    }
-
     // ═══════════ 1. port == 80 ═══════════════════════════════════════════
 
     let t1_tree = {
         let v = vec![Value::Int(80)];
-        let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 80 });
+        let f: Box<FilterNode> = Box::new(FilterNode::EqInt { idx: 0, val: 80 });
         median_ns("port == 80", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
@@ -122,7 +105,7 @@ fn main() {
 
     let t2_tree = {
         let v = vec![Value::String(Arc::from("GET"))];
-        let f: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 0, val: "GET".to_string() });
+        let f: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 0, val: "GET".to_string() });
         median_ns("method == GET", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
@@ -163,10 +146,10 @@ fn main() {
 
     let t3_tree = {
         let v = vec![Value::Int(2000)];
-        let f: Box<dyn BoolFilter> = Box::new(cel::vm::filter_tree::And {
-            a: GeIntConst { var_idx: 0, val: 1024 },
-            b: LeIntConst { var_idx: 0, val: 65535 },
-        });
+        let f: Box<FilterNode> = Box::new(FilterNode::And(
+            Box::new(FilterNode::GeInt { idx: 0, val: 1024 }),
+            Box::new(FilterNode::LtInt { idx: 0, val: 65535 }),
+        ));
         median_ns("port range", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
@@ -207,7 +190,10 @@ fn main() {
 
     let t4_tree = {
         let v = vec![Value::Int(80)];
-        let f: Box<dyn BoolFilter> = Box::new(InIntLinearSet { var_idx: 0, vals: vec![80, 443, 8080, 3000] });
+        let f: Box<FilterNode> = Box::new(FilterNode::InIntLinear {
+            idx: 0,
+            vals: vec![80, 443, 8080, 3000],
+        });
         median_ns("port IN set", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
@@ -251,9 +237,9 @@ fn main() {
             Value::String(Arc::from("GET")),
             Value::String(Arc::from("/api")),
         ];
-        let a: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 0, val: "GET".to_string() });
-        let b: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 1, val: "/api".to_string() });
-        let f: Box<dyn BoolFilter> = Box::new(cel::vm::filter_tree::And { a, b });
+        let a: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 0, val: "GET".to_string() });
+        let b: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 1, val: "/api".to_string() });
+        let f: Box<FilterNode> = Box::new(FilterNode::And(a, b));
         median_ns("multi-field", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
@@ -323,7 +309,7 @@ fn main() {
     let w_int_eq = 0.35;
     let w_str_eq = 0.15;
     let w_in_set = 0.15;
-    let w_range  = 0.25; // range + arith_cmp proxy
+    let w_range  = 0.25;
     let w_multi  = 0.10;
 
     let tree_score   = t1_tree*w_int_eq + t2_tree*w_str_eq + t4_tree*w_in_set + t3_tree*w_range + t5_tree*w_multi;

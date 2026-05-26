@@ -13,7 +13,7 @@
 use cel::context::Context;
 use cel::fast::{EvalContext, FieldType, Filter, Schema};
 use cel::objects::Value;
-use cel::vm::filter_tree::{BoolFilter, EqIntConst, EqStrConst};
+use cel::vm::filter_tree::FilterNode;
 use cel::Program;
 use std::sync::Arc;
 use std::time::Instant;
@@ -153,29 +153,29 @@ fn main() {
     println!("\nFilter Tree:");
     let tree_int_eq = {
         let vars = vec![Value::Int(80)];
-        let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 80 });
+        let f: Box<FilterNode> = Box::new(FilterNode::EqInt { idx: 0, val: 80 });
         bench("int_eq", || { std::hint::black_box(f.eval(&vars)); })
     };
     let tree_str_eq = {
         let vars = vec![Value::String(Arc::from("GB"))];
-        let f: Box<dyn BoolFilter> = Box::new(EqStrConst {
-            var_idx: 0,
+        let f: Box<FilterNode> = Box::new(FilterNode::EqStr {
+            idx: 0,
             val: "GB".to_string(),
         });
         bench("str_eq", || { std::hint::black_box(f.eval(&vars)); })
     };
     let tree_in_set = {
         let vars = vec![Value::Int(80)];
-        let f: Box<dyn BoolFilter> = Box::new(cel::vm::filter_tree::InIntLinearSet {
-            var_idx: 0,
+        let f: Box<FilterNode> = Box::new(FilterNode::InIntLinear {
+            idx: 0,
             vals: vec![80, 443, 8080, 8443, 21, 22, 23],
         });
         bench("in_set", || { std::hint::black_box(f.eval(&vars)); })
     };
     let tree_arith_cmp = {
         let vars = vec![Value::Int(924)];
-        let f: Box<dyn BoolFilter> = Box::new(cel::vm::filter_tree::AddConstGe {
-            var_idx: 0,
+        let f: Box<FilterNode> = Box::new(FilterNode::AddGe {
+            idx: 0,
             arith: 100,
             cmp: 1024,
         });
@@ -184,7 +184,7 @@ fn main() {
     let tree_func_call = {
         let vars = vec![Value::String(Arc::from("hello"))];
         // No direct func_call in FilterTree; use int_eq as proxy
-        let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
+        let f: Box<FilterNode> = Box::new(FilterNode::EqInt { idx: 0, val: 1 });
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
     };
 
@@ -233,7 +233,7 @@ fn main() {
     // func_call falls through to AST — no schema needed for setup
     let schema_func_call = {
         let vars = vec![Value::String(Arc::from("hello"))];
-        let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
+        let f: Box<FilterNode> = Box::new(FilterNode::EqInt { idx: 0, val: 1 });
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
     };
 

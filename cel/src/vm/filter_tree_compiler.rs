@@ -1,19 +1,11 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{
-    AhoCorasickContains, AddConstEq, AddConstGe, AddConstGt, AddConstLe, AddConstLt, AddConstNe,
-    And, BoolFilter, ContainsAny, ContainsConst, EndsWithConst, EqI64Expr, EqIntConst, EqStrConst,
-    GeI64Expr, GeIntConst, GtI64Expr, GtIntConst, I64Expr, InIntHashSet, InIntLinearSet,
-    InStrHashSet, InStrLinearSet, LeI64Expr, LeIntConst, ListExpr, LtI64Expr, LtIntConst,
-    MulConstEq, MulConstGe, MulConstGt, MulConstLe, MulConstLt, MulConstNe,
-    NeI64Expr, NeIntConst, Not, Or, StartsWithConst, StrExpr,
-    SubConstEq, SubConstGe, SubConstGt, SubConstLe, SubConstLt, SubConstNe,
-};
+use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
 use crate::Expression;
 use std::collections::HashMap;
 
 pub struct CompiledFilterTree {
-    pub filter: Box<dyn BoolFilter>,
+    pub filter: Box<FilterNode>,
     pub var_names: Vec<String>,
 }
 
@@ -96,7 +88,7 @@ impl FilterCtx {
     }
 }
 
-fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<dyn BoolFilter>, String> {
+fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, String> {
     match expr {
         Expr::Call(call) => {
             let name = call.func_name.as_str();
@@ -116,16 +108,16 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<dyn BoolFilter>,
             if name == operators::LOGICAL_AND && call.args.len() == 2 {
                 let a = compile_expr(ctx, &call.args[0].expr)?;
                 let b = compile_expr(ctx, &call.args[1].expr)?;
-                return Ok(Box::new(And { a, b }));
+                return Ok(Box::new(FilterNode::And(a, b)));
             }
             if name == operators::LOGICAL_OR && call.args.len() == 2 {
                 let a = compile_expr(ctx, &call.args[0].expr)?;
                 let b = compile_expr(ctx, &call.args[1].expr)?;
-                return Ok(Box::new(Or { a, b }));
+                return Ok(Box::new(FilterNode::Or(a, b)));
             }
             if name == operators::LOGICAL_NOT && call.args.len() == 1 {
                 let inner = compile_expr(ctx, &call.args[0].expr)?;
-                return Ok(Box::new(Not { inner }));
+                return Ok(Box::new(FilterNode::Not(inner)));
             }
 
             // String method calls: startsWith, endsWith, contains (function-style: contains(path, "/api"))
@@ -168,7 +160,7 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<dyn BoolFilter>,
 }
 
 /// Try to compile a pure OR-tree of `.contains(literal)` into a single AC scan.
-fn try_compile_ac_or(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<dyn BoolFilter>> {
+fn try_compile_ac_or(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<FilterNode>> {
     let mut patterns = Vec::new();
     let mut var_name: Option<String> = None;
     collect_contains_or(expr, &mut var_name, &mut patterns)?;
@@ -180,17 +172,17 @@ fn try_compile_ac_or(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<dyn BoolFil
 
     // For very small pattern counts on short strings, naive search wins over AC.
     if patterns.len() <= 4 {
-        return Some(Box::new(ContainsAny {
-            var_idx: idx,
+        return Some(Box::new(FilterNode::ContainsAny {
+            idx,
             needles: patterns,
         }));
     }
 
     let automaton = aho_corasick::AhoCorasick::new(&patterns).ok()?;
-    Some(Box::new(AhoCorasickContains {
-        var_idx: idx,
-        automaton,
-        min_matches: 1,
+    Some(Box::new(FilterNode::AhoContains {
+        idx,
+        ac: automaton,
+        min: 1,
     }))
 }
 
@@ -226,7 +218,7 @@ fn collect_contains_or(
 }
 
 /// Try to compile a pure AND-tree of `.contains(literal)` into a single AC scan.
-fn try_compile_ac_and(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<dyn BoolFilter>> {
+fn try_compile_ac_and(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<FilterNode>> {
     let mut patterns = Vec::new();
     let mut var_name: Option<String> = None;
     collect_contains_and(expr, &mut var_name, &mut patterns)?;
@@ -236,10 +228,10 @@ fn try_compile_ac_and(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<dyn BoolFi
     let var_name = var_name?;
     let idx = ctx.var_idx(&var_name);
     let automaton = aho_corasick::AhoCorasick::new(&patterns).ok()?;
-    Some(Box::new(AhoCorasickContains {
-        var_idx: idx,
-        automaton,
-        min_matches: patterns.len(),
+    Some(Box::new(FilterNode::AhoContains {
+        idx,
+        ac: automaton,
+        min: patterns.len(),
     }))
 }
 
@@ -302,7 +294,7 @@ fn try_compile_int_cmp(
     op: &str,
     left: &Expr,
     right: &Expr,
-) -> Option<Box<dyn BoolFilter>> {
+) -> Option<Box<FilterNode>> {
     // Fast path: var op literal  (e.g. port == 80)
     fn try_var_lit(ctx: &mut FilterCtx, var_expr: &Expr, lit_expr: &Expr) -> Option<(usize, i64)> {
         let name = match var_expr {
@@ -318,12 +310,12 @@ fn try_compile_int_cmp(
 
     if let Some((idx, val)) = try_var_lit(ctx, left, right) {
         return Some(match op {
-            operators::EQUALS => Box::new(EqIntConst { var_idx: idx, val }),
-            operators::NOT_EQUALS => Box::new(NeIntConst { var_idx: idx, val }),
-            operators::LESS => Box::new(LtIntConst { var_idx: idx, val }),
-            operators::LESS_EQUALS => Box::new(LeIntConst { var_idx: idx, val }),
-            operators::GREATER => Box::new(GtIntConst { var_idx: idx, val }),
-            operators::GREATER_EQUALS => Box::new(GeIntConst { var_idx: idx, val }),
+            operators::EQUALS => Box::new(FilterNode::EqInt { idx, val }),
+            operators::NOT_EQUALS => Box::new(FilterNode::NeInt { idx, val }),
+            operators::LESS => Box::new(FilterNode::LtInt { idx, val }),
+            operators::LESS_EQUALS => Box::new(FilterNode::LeInt { idx, val }),
+            operators::GREATER => Box::new(FilterNode::GtInt { idx, val }),
+            operators::GREATER_EQUALS => Box::new(FilterNode::GeInt { idx, val }),
             _ => return None,
         });
     }
@@ -332,12 +324,12 @@ fn try_compile_int_cmp(
     if let Some((idx, val)) = try_var_lit(ctx, right, left) {
         // Swap operator: 80 == port  =>  port == 80
         return Some(match op {
-            operators::EQUALS => Box::new(EqIntConst { var_idx: idx, val }),
-            operators::NOT_EQUALS => Box::new(NeIntConst { var_idx: idx, val }),
-            operators::LESS => Box::new(GtIntConst { var_idx: idx, val }), // 80 < port => port > 80
-            operators::LESS_EQUALS => Box::new(GeIntConst { var_idx: idx, val }), // 80 <= port => port >= 80
-            operators::GREATER => Box::new(LtIntConst { var_idx: idx, val }), // 80 > port => port < 80
-            operators::GREATER_EQUALS => Box::new(LeIntConst { var_idx: idx, val }), // 80 >= port => port <= 80
+            operators::EQUALS => Box::new(FilterNode::EqInt { idx, val }),
+            operators::NOT_EQUALS => Box::new(FilterNode::NeInt { idx, val }),
+            operators::LESS => Box::new(FilterNode::GtInt { idx, val }), // 80 < port => port > 80
+            operators::LESS_EQUALS => Box::new(FilterNode::GeInt { idx, val }), // 80 <= port => port >= 80
+            operators::GREATER => Box::new(FilterNode::LtInt { idx, val }), // 80 > port => port < 80
+            operators::GREATER_EQUALS => Box::new(FilterNode::LeInt { idx, val }), // 80 >= port => port <= 80
             _ => return None,
         });
     }
@@ -348,7 +340,7 @@ fn try_compile_int_cmp(
         expr: &Expr,
         op: &str,
         lit_expr: &Expr,
-    ) -> Option<Box<dyn BoolFilter>> {
+    ) -> Option<Box<FilterNode>> {
         let cmp_val = match lit_expr {
             Expr::Literal(LiteralValue::Int(i)) => *i.inner(),
             _ => return None,
@@ -376,42 +368,42 @@ fn try_compile_int_cmp(
         // Try var op lit and lit op var patterns for the arithmetic
         if let Some((idx, arith)) = var_idx(&call.args[0].expr).zip(lit_val(&call.args[1].expr)) {
             return Some(match (name, op) {
-                (operators::ADD, operators::EQUALS) => Box::new(AddConstEq { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::NOT_EQUALS) => Box::new(AddConstNe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS) => Box::new(AddConstLt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS_EQUALS) => Box::new(AddConstLe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER) => Box::new(AddConstGt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER_EQUALS) => Box::new(AddConstGe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::EQUALS) => Box::new(SubConstEq { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(SubConstNe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS) => Box::new(SubConstLt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(SubConstLe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER) => Box::new(SubConstGt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(SubConstGe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::EQUALS) => Box::new(MulConstEq { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::NOT_EQUALS) => Box::new(MulConstNe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::LESS) => Box::new(MulConstLt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::LESS_EQUALS) => Box::new(MulConstLe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::GREATER) => Box::new(MulConstGt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::GREATER_EQUALS) => Box::new(MulConstGe { var_idx: idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::AddEq { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::AddNe { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS) => Box::new(FilterNode::AddLt { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::AddLe { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER) => Box::new(FilterNode::AddGt { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::AddGe { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::SubEq { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::SubNe { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::SubLt { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::SubLe { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::SubGt { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::SubGe { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::EQUALS) => Box::new(FilterNode::MulEq { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::NOT_EQUALS) => Box::new(FilterNode::MulNe { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::LESS) => Box::new(FilterNode::MulLt { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::LESS_EQUALS) => Box::new(FilterNode::MulLe { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::GREATER) => Box::new(FilterNode::MulGt { idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::GREATER_EQUALS) => Box::new(FilterNode::MulGe { idx, arith, cmp: cmp_val }),
                 _ => return None,
             });
         }
         // lit op var (e.g. 100 + port == 1024)
         if let Some((arith, idx)) = lit_val(&call.args[0].expr).zip(var_idx(&call.args[1].expr)) {
             return Some(match (name, op) {
-                (operators::ADD, operators::EQUALS) => Box::new(AddConstEq { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::NOT_EQUALS) => Box::new(AddConstNe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS) => Box::new(AddConstGt { var_idx: idx, arith, cmp: cmp_val }), // swapped: lit < var+arith => var+arith > lit
-                (operators::ADD, operators::LESS_EQUALS) => Box::new(AddConstGe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER) => Box::new(AddConstLt { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER_EQUALS) => Box::new(AddConstLe { var_idx: idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::EQUALS) => Box::new(SubConstEq { var_idx: idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(SubConstNe { var_idx: idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS) => Box::new(SubConstGt { var_idx: idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(SubConstGe { var_idx: idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER) => Box::new(SubConstLt { var_idx: idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(SubConstLe { var_idx: idx, arith: -arith, cmp: cmp_val }),
+                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::AddEq { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::AddNe { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS) => Box::new(FilterNode::AddGt { idx, arith, cmp: cmp_val }), // swapped: lit < var+arith => var+arith > lit
+                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::AddGe { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER) => Box::new(FilterNode::AddLt { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::AddLe { idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::SubEq { idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::SubNe { idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::SubGt { idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::SubGe { idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::SubLt { idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::SubLe { idx, arith: -arith, cmp: cmp_val }),
                 _ => return None,
             });
         }
@@ -425,34 +417,16 @@ fn try_compile_int_cmp(
         return Some(f);
     }
 
-    // General path: I64Expr on both sides (supports arithmetic)
+    // General path: FilterNode::*Expr on both sides (supports arithmetic)
     let left_expr = try_compile_i64_expr(ctx, left)?;
     let right_expr = try_compile_i64_expr(ctx, right)?;
-    let f: Box<dyn BoolFilter> = match op {
-        operators::EQUALS => Box::new(EqI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
-        operators::NOT_EQUALS => Box::new(NeI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
-        operators::LESS => Box::new(LtI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
-        operators::LESS_EQUALS => Box::new(LeI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
-        operators::GREATER => Box::new(GtI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
-        operators::GREATER_EQUALS => Box::new(GeI64Expr {
-            left: left_expr,
-            right: right_expr,
-        }),
+    let f: Box<FilterNode> = match op {
+        operators::EQUALS => Box::new(FilterNode::EqExpr { left: left_expr, right: right_expr }),
+        operators::NOT_EQUALS => Box::new(FilterNode::NeExpr { left: left_expr, right: right_expr }),
+        operators::LESS => Box::new(FilterNode::LtExpr { left: left_expr, right: right_expr }),
+        operators::LESS_EQUALS => Box::new(FilterNode::LeExpr { left: left_expr, right: right_expr }),
+        operators::GREATER => Box::new(FilterNode::GtExpr { left: left_expr, right: right_expr }),
+        operators::GREATER_EQUALS => Box::new(FilterNode::GeExpr { left: left_expr, right: right_expr }),
         _ => return None,
     };
     Some(f)
@@ -526,7 +500,7 @@ fn try_compile_str_cmp(
     op: &str,
     left: &Expr,
     right: &Expr,
-) -> Option<Box<dyn BoolFilter>> {
+) -> Option<Box<FilterNode>> {
     let (var_name, val) = match (left, right) {
         (Expr::Ident(name), Expr::Literal(LiteralValue::String(s))) => {
             (name, s.inner().to_string())
@@ -540,7 +514,7 @@ fn try_compile_str_cmp(
         return None;
     }
     let idx = ctx.var_idx(var_name);
-    Some(Box::new(EqStrConst { var_idx: idx, val }))
+    Some(Box::new(FilterNode::EqStr { idx, val }))
 }
 
 fn try_compile_str_bool(
@@ -548,7 +522,7 @@ fn try_compile_str_bool(
     func: &str,
     receiver: &Expr,
     arg: &Expr,
-) -> Option<Box<dyn BoolFilter>> {
+) -> Option<Box<FilterNode>> {
     let var_name = match receiver {
         Expr::Ident(name) => name,
         _ => return None,
@@ -559,9 +533,9 @@ fn try_compile_str_bool(
     };
     let idx = ctx.var_idx(var_name);
     match func {
-        "startsWith" => Some(Box::new(StartsWithConst { var_idx: idx, prefix: val })),
-        "endsWith" => Some(Box::new(EndsWithConst { var_idx: idx, suffix: val })),
-        "contains" => Some(Box::new(ContainsConst { var_idx: idx, substring: val })),
+        "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
+        "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
+        "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
         _ => None,
     }
 }
@@ -570,7 +544,7 @@ fn try_compile_str_bool(
 fn try_compile_target_str_bool(
     ctx: &mut FilterCtx,
     call: &crate::common::ast::CallExpr,
-) -> Option<Box<dyn BoolFilter>> {
+) -> Option<Box<FilterNode>> {
     let func = call.func_name.as_str();
     if !matches!(func, "startsWith" | "endsWith" | "contains") {
         return None;
@@ -587,9 +561,9 @@ fn try_compile_target_str_bool(
     };
     let idx = ctx.var_idx(var_name);
     match func {
-        "startsWith" => Some(Box::new(StartsWithConst { var_idx: idx, prefix: val })),
-        "endsWith" => Some(Box::new(EndsWithConst { var_idx: idx, suffix: val })),
-        "contains" => Some(Box::new(ContainsConst { var_idx: idx, substring: val })),
+        "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
+        "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
+        "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
         _ => None,
     }
 }
@@ -598,7 +572,7 @@ fn try_compile_in_set(
     ctx: &mut FilterCtx,
     left: &Expr,
     right: &Expr,
-) -> Option<Box<dyn BoolFilter>> {
+) -> Option<Box<FilterNode>> {
     let var_name = match left {
         Expr::Ident(name) => name,
         _ => return None,
@@ -621,10 +595,10 @@ fn try_compile_in_set(
     }
     if ints.len() == list.len() {
         if ints.len() <= 16 {
-            return Some(Box::new(InIntLinearSet { var_idx: idx, vals: ints }));
+            return Some(Box::new(FilterNode::InIntLinear { idx, vals: ints }));
         }
         let set: std::collections::HashSet<i64> = ints.into_iter().collect();
-        return Some(Box::new(InIntHashSet { var_idx: idx, set }));
+        return Some(Box::new(FilterNode::InIntHash { idx, set }));
     }
 
     // Try all-string
@@ -639,10 +613,10 @@ fn try_compile_in_set(
     }
     if strs.len() == list.len() {
         if strs.len() <= 16 {
-            return Some(Box::new(InStrLinearSet { var_idx: idx, vals: strs }));
+            return Some(Box::new(FilterNode::InStrLinear { idx, vals: strs }));
         }
         let set: std::collections::HashSet<String> = strs.into_iter().collect();
-        return Some(Box::new(InStrHashSet { var_idx: idx, set }));
+        return Some(Box::new(FilterNode::InStrHash { idx, set }));
     }
 
     None
