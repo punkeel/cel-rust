@@ -253,10 +253,10 @@ fn main() {
 
     // Weighted score (same weights as main score benchmark)
     let w_int_eq = 0.35;
-    let w_str_eq = 0.15;
+    let _w_str_eq = 0.15;
     let w_in_set = 0.15;
-    let w_range  = 0.15;
-    let w_multi  = 0.10;
+    let _w_range  = 0.15;
+    let _w_multi  = 0.10;
     // Use multi-field weight as proxy for func_call
     // Actually match score.rs weights: int_eq 35%, int_range(~str_eq) 15%, str_eq 15%, in_set 15%, arith_cmp(~range) 10%, func_call 10%
     // We don't have arith_cmp here. Use range for all non-aligned patterns.
