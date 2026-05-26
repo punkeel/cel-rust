@@ -36,9 +36,13 @@ impl EvalState {
         }
     }
 
-    fn bind_vars(&mut self, program: &Program, ctx: &Context) {
+    pub fn bind_vars(&mut self, program: &Program, ctx: &Context) {
         if !self.needs_bind {
             return;
+        }
+        let need = program.var_names.len();
+        if self.vars.len() != need {
+            self.vars.resize_with(need, || Value::Null);
         }
         for (i, name) in program.var_names.iter().enumerate() {
             let v = ctx
@@ -48,6 +52,15 @@ impl EvalState {
             self.vars[i] = v;
         }
         self.needs_bind = false;
+    }
+
+    pub fn set_vars(&mut self, vars: Vec<Value>) {
+        self.vars = vars;
+        self.needs_bind = false;
+    }
+
+    pub fn take_vars(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.vars)
     }
 }
 
@@ -60,6 +73,10 @@ impl Default for EvalState {
 pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<Value, ExecutionError> {
     state.reset(program);
     state.bind_vars(program, ctx);
+    eval_fast(program, state)
+}
+
+pub fn eval_fast(program: &Program, state: &mut EvalState) -> Result<Value, ExecutionError> {
     let stack = &mut state.stack;
     let vars = &mut state.vars;
     let iter_stack = &mut state.iter_stack;
@@ -300,7 +317,7 @@ pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<V
                 let argc = *argc as usize;
                 let args_start = stack.len() - argc;
                 let args = &stack[args_start..];
-                let result = vm_call(*builtin_id, args, ctx)?;
+                let result = vm_call(*builtin_id, args)?;
                 stack.truncate(args_start);
                 stack.push(result);
             }
@@ -657,7 +674,7 @@ pub(super) fn key_to_value(k: Key) -> Value {
     }
 }
 
-fn vm_call(builtin_id: u16, args: &[Value], _ctx: &Context) -> Result<Value, ExecutionError> {
+fn vm_call(builtin_id: u16, args: &[Value]) -> Result<Value, ExecutionError> {
     match builtin_id {
         0 => {
             if args.len() != 1 {

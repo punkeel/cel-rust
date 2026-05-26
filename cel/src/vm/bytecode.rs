@@ -77,6 +77,12 @@ pub struct Program {
     pub instructions: Vec<Instr>,
 }
 
+impl Program {
+    pub fn var_names(&self) -> &[String] {
+        &self.var_names
+    }
+}
+
 impl Clone for Program {
     fn clone(&self) -> Self {
         Self {
