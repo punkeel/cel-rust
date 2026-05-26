@@ -1373,12 +1373,10 @@ impl Value {
                 }
                 match &call.target {
                     None => {
-                        let args: Result<Vec<Cow<dyn Val>>, ExecutionError> = call
-                            .args
-                            .iter()
-                            .map(|a| Value::resolve_val(a, ctx))
-                            .collect();
-                        let args = args?;
+                        let mut args = Vec::with_capacity(call.args.len());
+                        for a in &call.args {
+                            args.push(Value::resolve_val(a, ctx)?);
+                        }
                         // FAST PATH: resolved function pointer from compile-time overload resolution
                         if let Some(op) = call.resolved_op {
                             return op(args);
@@ -1394,12 +1392,10 @@ impl Value {
                         Ok(Cow::<dyn Val>::Owned(TryInto::<Box<dyn Val>>::try_into(v)?))
                     }
                     Some(target) => {
-                        let args: Result<Vec<Cow<dyn Val>>, ExecutionError> = call
-                            .args
-                            .iter()
-                            .map(|a| Value::resolve_val(a, ctx))
-                            .collect();
-                        let args = args?;
+                        let mut args = Vec::with_capacity(1 + call.args.len());
+                        for a in &call.args {
+                            args.push(Value::resolve_val(a, ctx)?);
+                        }
                         let qualified_func = match &target.expr {
                             Expr::Ident(prefix) => {
                                 let qualified_name = format!("{prefix}.{}", &call.func_name);
