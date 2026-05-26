@@ -12,7 +12,8 @@ pub struct IterFrame {
 pub struct EvalState {
     pub stack: Vec<Value>,
     pub iter_stack: Vec<IterFrame>,
-    pub vars: Vec<Option<Value>>,
+    pub vars: Vec<Value>,
+    needs_bind: bool,
 }
 
 impl EvalState {
@@ -21,6 +22,7 @@ impl EvalState {
             stack: Vec::with_capacity(64),
             iter_stack: Vec::new(),
             vars: Vec::with_capacity(16),
+            needs_bind: true,
         }
     }
 
@@ -28,9 +30,24 @@ impl EvalState {
         self.stack.clear();
         self.iter_stack.clear();
         let need = program.var_names.len();
-        if self.vars.len() < need {
-            self.vars.resize_with(need, || None);
+        if self.vars.len() != need {
+            self.vars.resize_with(need, || Value::Null);
+            self.needs_bind = true;
         }
+    }
+
+    fn bind_vars(&mut self, program: &Program, ctx: &Context) {
+        if !self.needs_bind {
+            return;
+        }
+        for (i, name) in program.var_names.iter().enumerate() {
+            let v = ctx
+                .get_variable(name)
+                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
+                .unwrap_or(Value::Null);
+            self.vars[i] = v;
+        }
+        self.needs_bind = false;
     }
 }
 
@@ -42,6 +59,7 @@ impl Default for EvalState {
 
 pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<Value, ExecutionError> {
     state.reset(program);
+    state.bind_vars(program, ctx);
     let stack = &mut state.stack;
     let vars = &mut state.vars;
     let iter_stack = &mut state.iter_stack;
@@ -64,18 +82,7 @@ pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<V
                 IDX_ACCU => stack.push(accu.clone()),
                 n => {
                     let slot = n as usize;
-                    let val = if let Some(ref v) = vars[slot] {
-                        v.clone()
-                    } else {
-                        let name = &program.var_names[slot];
-                        let v = ctx
-                            .get_variable(name)
-                            .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                            .unwrap_or(Value::Null);
-                        vars[slot] = Some(v.clone());
-                        v
-                    };
-                    stack.push(val);
+                    stack.push(vars[slot].clone());
                 }
             },
             Instr::Pop => {
@@ -169,6 +176,36 @@ pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<V
                 let a = stack.pop().unwrap();
                 stack.push(Value::Bool(vm_le(&b, &a)?));
             }
+            Instr::LoadVarEqConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(vm_eq(a, b)));
+            }
+            Instr::LoadVarNeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(!vm_eq(a, b)));
+            }
+            Instr::LoadVarLtConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(vm_lt(a, b)?));
+            }
+            Instr::LoadVarLeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(vm_le(a, b)?));
+            }
+            Instr::LoadVarGtConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(vm_lt(b, a)?));
+            }
+            Instr::LoadVarGeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                stack.push(Value::Bool(vm_le(b, a)?));
+            }
             Instr::Not => {
                 let a = stack.pop().unwrap();
                 stack.push(Value::Bool(!try_bool(a)?));
@@ -221,20 +258,7 @@ pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<V
                 let obj = match *var_idx {
                     IDX_ITER_ELEM => iter_elem.clone(),
                     IDX_ACCU => accu.clone(),
-                    n => {
-                        let slot = n as usize;
-                        if let Some(ref v) = vars[slot] {
-                            v.clone()
-                        } else {
-                            let name = &program.var_names[slot];
-                            let v = ctx
-                                .get_variable(name)
-                                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                                .unwrap_or(Value::Null);
-                            vars[slot] = Some(v.clone());
-                            v
-                        }
-                    }
+                    n => vars[n as usize].clone(),
                 };
                 let field = match &program.constants[*field_idx as usize] {
                     Value::String(s) => s,
@@ -246,18 +270,7 @@ pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<V
                 let obj = match *var_idx {
                     IDX_ITER_ELEM => &iter_elem,
                     IDX_ACCU => &accu,
-                    n => {
-                        let slot = n as usize;
-                        if vars[slot].is_none() {
-                            let name = &program.var_names[slot];
-                            let v = ctx
-                                .get_variable(name)
-                                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                                .unwrap_or(Value::Null);
-                            vars[slot] = Some(v);
-                        }
-                        vars[slot].as_ref().unwrap()
-                    }
+                    n => &vars[n as usize],
                 };
                 let field = match &program.constants[*field_idx as usize] {
                     Value::String(s) => s,

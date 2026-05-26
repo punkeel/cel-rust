@@ -46,6 +46,14 @@ pub enum Instr {
     LoadVarSelect(u16, u16), // (var_idx, field_idx)  fused LoadVar+Select
     LoadVarHasField(u16, u16), // (var_idx, field_idx) fused LoadVar+HasField
 
+    // Fused var+const comparisons
+    LoadVarEqConst(u16, u16), // (var_idx, const_idx)
+    LoadVarNeConst(u16, u16),
+    LoadVarLtConst(u16, u16),
+    LoadVarLeConst(u16, u16),
+    LoadVarGtConst(u16, u16),
+    LoadVarGeConst(u16, u16),
+
     // Calls
     Call(u16, u16), // (builtin_id, argc)
     Size,

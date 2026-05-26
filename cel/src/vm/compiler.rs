@@ -72,6 +72,70 @@ impl Compiler {
         idx
     }
 
+    fn as_var_idx(&mut self, expr: &Expr) -> Option<u16> {
+        match expr {
+            Expr::Ident(name) => {
+                if self.lookup_comp_var(name).is_some() {
+                    None
+                } else {
+                    Some(self.ensure_var(name))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn as_const_idx(&mut self, expr: &Expr) -> Option<u16> {
+        match expr {
+            Expr::Literal(lit) => {
+                let v = lit_to_value(lit);
+                Some(self.add_const(v))
+            }
+            _ => None,
+        }
+    }
+
+    fn try_emit_var_const_cmp(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        name: &str,
+    ) -> bool {
+        // left = var, right = const
+        if let Some(var_idx) = self.as_var_idx(left) {
+            if let Some(const_idx) = self.as_const_idx(right) {
+                let instr = match name {
+                    operators::EQUALS => Instr::LoadVarEqConst(var_idx, const_idx),
+                    operators::NOT_EQUALS => Instr::LoadVarNeConst(var_idx, const_idx),
+                    operators::LESS => Instr::LoadVarLtConst(var_idx, const_idx),
+                    operators::LESS_EQUALS => Instr::LoadVarLeConst(var_idx, const_idx),
+                    operators::GREATER => Instr::LoadVarGtConst(var_idx, const_idx),
+                    operators::GREATER_EQUALS => Instr::LoadVarGeConst(var_idx, const_idx),
+                    _ => return false,
+                };
+                self.emit(instr);
+                return true;
+            }
+        }
+        // left = const, right = var  (swap comparison direction)
+        if let Some(var_idx) = self.as_var_idx(right) {
+            if let Some(const_idx) = self.as_const_idx(left) {
+                let instr = match name {
+                    operators::EQUALS => Instr::LoadVarEqConst(var_idx, const_idx),
+                    operators::NOT_EQUALS => Instr::LoadVarNeConst(var_idx, const_idx),
+                    operators::LESS => Instr::LoadVarGtConst(var_idx, const_idx),
+                    operators::LESS_EQUALS => Instr::LoadVarGeConst(var_idx, const_idx),
+                    operators::GREATER => Instr::LoadVarLtConst(var_idx, const_idx),
+                    operators::GREATER_EQUALS => Instr::LoadVarLeConst(var_idx, const_idx),
+                    _ => return false,
+                };
+                self.emit(instr);
+                return true;
+            }
+        }
+        false
+    }
+
     fn emit(&mut self, instr: Instr) -> usize {
         self.instructions.push(instr);
         self.instructions.len() - 1
@@ -190,36 +254,54 @@ impl Compiler {
                     return Ok(());
                 }
                 operators::EQUALS => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::EQUALS) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Eq);
                     return Ok(());
                 }
                 operators::NOT_EQUALS => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::NOT_EQUALS) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Ne);
                     return Ok(());
                 }
                 operators::LESS => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::LESS) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Lt);
                     return Ok(());
                 }
                 operators::LESS_EQUALS => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::LESS_EQUALS) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Le);
                     return Ok(());
                 }
                 operators::GREATER => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::GREATER) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Gt);
                     return Ok(());
                 }
                 operators::GREATER_EQUALS => {
+                    if self.try_emit_var_const_cmp(&call.args[0].expr, &call.args[1].expr, operators::GREATER_EQUALS) {
+                        return Ok(());
+                    }
                     self.compile_expr(&call.args[0].expr)?;
                     self.compile_expr(&call.args[1].expr)?;
                     self.emit(Instr::Ge);
