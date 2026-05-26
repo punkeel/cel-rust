@@ -1,5 +1,9 @@
 //! Benchmark: CEL AST vs Tree vs cel::fast vs Wirefilter.
 //!
+//! Shows two cel::fast columns:
+//!   - "eval": set values once, eval many (same as Wirefilter/Tree benchmarks)
+//!   - "all":  set + eval each iteration (real per-request usage)
+//!
 //! Run: `cargo run --example vs_wirefilter --release`
 
 use cel::context::Context;
@@ -26,12 +30,13 @@ fn median_ns<F: FnMut()>(name: &str, label: &str, mut f: F) -> f64 {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = times.len() / 2;
     let ns = if times.len() % 2 == 0 { (times[mid-1] + times[mid]) / 2.0 } else { times[mid] };
-    println!("  {:28} {:8.1} ns", format!("{} ({})", name, label), ns);
+    // comment out individual lines to keep output clean
+    // println!("  {:28} {:8.1} ns", format!("{} ({})", name, label), ns);
     ns
 }
 
 fn main() {
-    println!("=== CEL vs Wirefilter ===\n");
+    println!("=== CEL vs Wirefilter (fair comparison) ===\n");
 
     // ── Helper: wirefilter int benchmark ──
     fn wf_int(expr: &str, field: &str, val: i64) -> f64 {
@@ -55,9 +60,22 @@ fn main() {
         median_ns(expr, "Wirefilter", || { std::hint::black_box(f.execute(&ctx).unwrap()); })
     }
 
-    // ═══════════ 1. port == 80 ═══════════════════════════════════════════
+    // ── Helper: cel::fast benchmark in two modes ──
+    struct FastBench {
+        t_eval: f64,  // set once, eval many (like wirefilter)
+        t_all: f64,   // set + eval each iteration
+    }
 
-    println!("--- port == 80 ---\n");
+    fn bench_fast(setup: impl Fn(&mut Schema, &mut EvalContext, &mut Filter), label: &str) -> FastBench {
+        let mut s = Schema::new();
+        let mut ctx = EvalContext::new(&s);
+        let f = Filter::compile("port == 0", &s).unwrap(); // placeholder
+        // The setup closure receives mutable refs and sets up schema/ctx/filter
+        // We can't pass filter by ref easily, so we do it inline at each callsite.
+        todo!()
+    }
+
+    // ═══════════ 1. port == 80 ═══════════════════════════════════════════
 
     let t1_tree = {
         let v = vec![Value::Int(80)];
@@ -65,12 +83,25 @@ fn main() {
         median_ns("port == 80", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
-    let t1_fast = {
+    // cel::fast — eval only (set once, like wirefilter)
+    let t1_fast_eval = {
         let mut s = Schema::new();
         let port = s.add_field("port", FieldType::Int);
         let filter = Filter::compile("port == 80", &s).unwrap();
         let mut ctx = EvalContext::new(&s);
-        median_ns("port == 80", "cel::fast", || {
+        ctx.set_i64(port, 80);
+        median_ns("port == 80", "cel::fast (eval)", || {
+            std::hint::black_box(filter.eval_bool(&ctx));
+        })
+    };
+
+    // cel::fast — set + eval each iteration (real per-request)
+    let t1_fast_all = {
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port == 80", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        median_ns("port == 80", "cel::fast (all)", || {
             ctx.set_i64(port, 80);
             std::hint::black_box(filter.eval(&ctx).unwrap());
         })
@@ -89,20 +120,29 @@ fn main() {
 
     // ═══════════ 2. method == "GET" ═══════════════════════════════════════
 
-    println!("\n--- method == \"GET\" ---\n");
-
     let t2_tree = {
         let v = vec![Value::String(Arc::from("GET"))];
         let f: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 0, val: "GET".to_string() });
         median_ns("method == GET", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
-    let t2_fast = {
+    let t2_fast_eval = {
         let mut s = Schema::new();
         let method = s.add_field("method", FieldType::String);
         let filter = Filter::compile("method == 'GET'", &s).unwrap();
         let mut ctx = EvalContext::new(&s);
-        median_ns("method == GET", "cel::fast", || {
+        ctx.set_str(method, "GET");
+        median_ns("method == GET", "cel::fast (eval)", || {
+            std::hint::black_box(filter.eval_bool(&ctx));
+        })
+    };
+
+    let t2_fast_all = {
+        let mut s = Schema::new();
+        let method = s.add_field("method", FieldType::String);
+        let filter = Filter::compile("method == 'GET'", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        median_ns("method == GET", "cel::fast (all)", || {
             ctx.set_str(method, "GET");
             std::hint::black_box(filter.eval(&ctx).unwrap());
         })
@@ -121,8 +161,6 @@ fn main() {
 
     // ═══════════ 3. port range ════════════════════════════════════════════
 
-    println!("\n--- port >= 1024 && port < 65535 ---\n");
-
     let t3_tree = {
         let v = vec![Value::Int(2000)];
         let f: Box<dyn BoolFilter> = Box::new(cel::vm::filter_tree::And {
@@ -132,12 +170,23 @@ fn main() {
         median_ns("port range", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
-    let t3_fast = {
+    let t3_fast_eval = {
         let mut s = Schema::new();
         let port = s.add_field("port", FieldType::Int);
         let filter = Filter::compile("port >= 1024 && port < 65535", &s).unwrap();
         let mut ctx = EvalContext::new(&s);
-        median_ns("port range", "cel::fast", || {
+        ctx.set_i64(port, 2000);
+        median_ns("port range", "cel::fast (eval)", || {
+            std::hint::black_box(filter.eval_bool(&ctx));
+        })
+    };
+
+    let t3_fast_all = {
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port >= 1024 && port < 65535", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        median_ns("port range", "cel::fast (all)", || {
             ctx.set_i64(port, 2000);
             std::hint::black_box(filter.eval(&ctx).unwrap());
         })
@@ -156,20 +205,29 @@ fn main() {
 
     // ═══════════ 4. port IN set ═══════════════════════════════════════════
 
-    println!("\n--- port in {{80, 443, 8080, 3000}} ---\n");
-
     let t4_tree = {
         let v = vec![Value::Int(80)];
         let f: Box<dyn BoolFilter> = Box::new(InIntLinearSet { var_idx: 0, vals: vec![80, 443, 8080, 3000] });
         median_ns("port IN set", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
-    let t4_fast = {
+    let t4_fast_eval = {
         let mut s = Schema::new();
         let port = s.add_field("port", FieldType::Int);
         let filter = Filter::compile("port in [80, 443, 8080, 3000]", &s).unwrap();
         let mut ctx = EvalContext::new(&s);
-        median_ns("port IN set", "cel::fast", || {
+        ctx.set_i64(port, 80);
+        median_ns("port IN set", "cel::fast (eval)", || {
+            std::hint::black_box(filter.eval_bool(&ctx));
+        })
+    };
+
+    let t4_fast_all = {
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port in [80, 443, 8080, 3000]", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        median_ns("port IN set", "cel::fast (all)", || {
             ctx.set_i64(port, 80);
             std::hint::black_box(filter.eval(&ctx).unwrap());
         })
@@ -188,8 +246,6 @@ fn main() {
 
     // ═══════════ 5. multi-field ═══════════════════════════════════════════
 
-    println!("\n--- method == \"GET\" && path == \"/api\" ---\n");
-
     let t5_tree = {
         let v = vec![
             Value::String(Arc::from("GET")),
@@ -201,13 +257,26 @@ fn main() {
         median_ns("multi-field", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
 
-    let t5_fast = {
+    let t5_fast_eval = {
         let mut s = Schema::new();
         let method = s.add_field("method", FieldType::String);
         let path = s.add_field("path", FieldType::String);
         let filter = Filter::compile("method == 'GET' && path == '/api'", &s).unwrap();
         let mut ctx = EvalContext::new(&s);
-        median_ns("multi-field", "cel::fast", || {
+        ctx.set_str(method, "GET");
+        ctx.set_str(path, "/api");
+        median_ns("multi-field", "cel::fast (eval)", || {
+            std::hint::black_box(filter.eval_bool(&ctx));
+        })
+    };
+
+    let t5_fast_all = {
+        let mut s = Schema::new();
+        let method = s.add_field("method", FieldType::String);
+        let path = s.add_field("path", FieldType::String);
+        let filter = Filter::compile("method == 'GET' && path == '/api'", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        median_ns("multi-field", "cel::fast (all)", || {
             ctx.set_str(method, "GET");
             ctx.set_str(path, "/api");
             std::hint::black_box(filter.eval(&ctx).unwrap());
@@ -241,38 +310,36 @@ fn main() {
 
     // ═══════════ Summary ═════════════════════════════════════════════════
 
-    println!("\n{}", "=".repeat(72));
-    println!("{:24} {:>10} {:>10} {:>10} {:>10}", "", "Tree", "cel::fast", "AST", "Wirefilter");
-    println!("{}", "-".repeat(72));
-    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port == 80", t1_tree, t1_fast, t1_ast, t1_wf);
-    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "method == GET", t2_tree, t2_fast, t2_ast, t2_wf);
-    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port range", t3_tree, t3_fast, t3_ast, t3_wf);
-    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port IN set", t4_tree, t4_fast, t4_ast, t4_wf);
-    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "multi-field", t5_tree, t5_fast, t5_ast, t5_wf);
-    println!("{}", "=".repeat(72));
+    println!("{:24} {:>10} {:>10} {:>10} {:>10} {:>10}", "", "Tree", "cel::fast", "cel::fast", "AST", "Wirefilter");
+    println!("{:24} {:>10} {:>10} {:>10} {:>10} {:>10}", "", "", "(eval)", "(set+eval)", "", "");
+    println!("{}", "-".repeat(74));
+    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port == 80", t1_tree, t1_fast_eval, t1_fast_all, t1_ast, t1_wf);
+    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "method == GET", t2_tree, t2_fast_eval, t2_fast_all, t2_ast, t2_wf);
+    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port range", t3_tree, t3_fast_eval, t3_fast_all, t3_ast, t3_wf);
+    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "port IN set", t4_tree, t4_fast_eval, t4_fast_all, t4_ast, t4_wf);
+    println!("{:24} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>10.1}", "multi-field", t5_tree, t5_fast_eval, t5_fast_all, t5_ast, t5_wf);
+    println!("{}", "=".repeat(74));
 
-    // Weighted score (same weights as main score benchmark)
     let w_int_eq = 0.35;
-    let _w_str_eq = 0.15;
+    let w_str_eq = 0.15;
     let w_in_set = 0.15;
-    let _w_range  = 0.15;
-    let _w_multi  = 0.10;
-    // Use multi-field weight as proxy for func_call
-    // Actually match score.rs weights: int_eq 35%, int_range(~str_eq) 15%, str_eq 15%, in_set 15%, arith_cmp(~range) 10%, func_call 10%
-    // We don't have arith_cmp here. Use range for all non-aligned patterns.
+    let w_range  = 0.25; // range + arith_cmp proxy
+    let w_multi  = 0.10;
 
-    // Approximate: int_eq 35%, str_eq 15%, in_set 15%, range 25% (range+arith), multi 10%
-    let tree_score = t1_tree*w_int_eq + t2_tree*0.15 + t4_tree*w_in_set + t3_tree*0.25 + t5_tree*0.10;
-    let fast_score = t1_fast*w_int_eq + t2_fast*0.15 + t4_fast*w_in_set + t3_fast*0.25 + t5_fast*0.10;
-    let ast_score  = t1_ast*w_int_eq  + t2_ast*0.15  + t4_ast*w_in_set  + t3_ast*0.25  + t5_ast*0.10;
-    let wf_score   = t1_wf*w_int_eq   + t2_wf*0.15   + t4_wf*w_in_set   + t3_wf*0.25   + t5_wf*0.10;
+    let tree_score   = t1_tree*w_int_eq + t2_tree*w_str_eq + t4_tree*w_in_set + t3_tree*w_range + t5_tree*w_multi;
+    let fast_eval    = t1_fast_eval*w_int_eq + t2_fast_eval*w_str_eq + t4_fast_eval*w_in_set + t3_fast_eval*w_range + t5_fast_eval*w_multi;
+    let fast_all     = t1_fast_all*w_int_eq + t2_fast_all*w_str_eq + t4_fast_all*w_in_set + t3_fast_all*w_range + t5_fast_all*w_multi;
+    let ast_score    = t1_ast*w_int_eq + t2_ast*w_str_eq + t4_ast*w_in_set + t3_ast*w_range + t5_ast*w_multi;
+    let wf_score     = t1_wf*w_int_eq + t2_wf*w_str_eq + t4_wf*w_in_set + t3_wf*w_range + t5_wf*w_multi;
 
     println!("\nWeighted score:\n");
-    println!("{:24} {:>10.1} ns", "Tree", tree_score);
-    println!("{:24} {:>10.1} ns", "cel::fast", fast_score);
+    println!("{:24} {:>10.1} ns", "Tree (eval only)", tree_score);
+    println!("{:24} {:>10.1} ns", "cel::fast (eval only)", fast_eval);
+    println!("{:24} {:>10.1} ns", "cel::fast (set + eval)", fast_all);
     println!("{:24} {:>10.1} ns", "AST", ast_score);
     println!("{:24} {:>10.1} ns", "Wirefilter", wf_score);
-    println!("{:24} {:>10.1}x", "cel::fast vs AST", ast_score / fast_score);
-    println!("{:24} {:>10.1}x", "cel::fast vs Wirefilter", wf_score / fast_score);
-    println!("{:24} {:>10.1}x", "Tree vs Wirefilter", wf_score / tree_score);
+    println!();
+    println!("{:24} {:>8.1}x", "Tree vs Wirefilter", wf_score / tree_score);
+    println!("{:24} {:>8.1}x", "cel::fast (eval) vs Wirefilter", wf_score / fast_eval);
+    println!("{:24} {:>8.1}x", "cel::fast (all) vs Wirefilter", wf_score / fast_all);
 }

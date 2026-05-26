@@ -11,3 +11,6 @@ codegen-units = 1
 opt-level = 3
 # Line numbers for dhat
 debug = 1
+
+[profile.release]
+lto = true

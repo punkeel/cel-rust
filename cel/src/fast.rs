@@ -353,9 +353,10 @@ impl Filter {
     /// If the expression was compiled to a filter tree, this runs in
     /// ~1–6 ns per call — just array reads. Otherwise it falls back
     /// transparently to the AST interpreter (~200 ns).
+    #[inline(always)]
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, ExecutionError> {
-        if let Some(tree) = &self.tree {
-            Ok(tree.filter.eval(ctx.as_slice()))
+        if self.tree.is_some() {
+            Ok(self.eval_bool(ctx))
         } else {
             let mut map_ctx = crate::Context::default();
             for (name, val) in self.var_names.iter().zip(ctx.as_slice().iter()) {
@@ -367,6 +368,15 @@ impl Filter {
                 Err(e) => Err(e),
             }
         }
+    }
+
+    /// Evaluate and return a `bool` directly, without Result wrapping.
+    ///
+    /// Same as [`eval`] but skips the `Result` allocation. Panics if
+    /// the filter tree was not compiled (use [`eval`] for fallback).
+    #[inline(always)]
+    pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
+        self.tree.as_ref().unwrap().filter.eval(ctx.as_slice())
     }
 
     /// Variable names referenced by this filter, in index order.
