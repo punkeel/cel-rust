@@ -9,6 +9,7 @@ mod macros;
 pub mod common;
 pub mod context;
 mod env;
+pub mod fast;
 pub mod function_handle;
 pub mod parser;
 pub mod vm;

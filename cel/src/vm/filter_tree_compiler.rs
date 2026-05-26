@@ -34,6 +34,23 @@ impl CompiledFilterTree {
     }
 }
 
+/// Compile an expression to a filter tree, using a Schema's field ordering
+/// for variable index assignment instead of auto-assignment.
+///
+/// `field_names` provides the name → index mapping: the position in the Vec
+/// is the index used in tree nodes and expected by EvalContext.
+pub fn compile_filter_tree_with_schema(
+    expr: &Expression,
+    field_names: &[&str],
+) -> Result<CompiledFilterTree, String> {
+    let mut ctx = FilterCtx::with_schema(field_names);
+    let filter = compile_expr(&mut ctx, &expr.expr)?;
+    Ok(CompiledFilterTree {
+        filter,
+        var_names: ctx.var_names,
+    })
+}
+
 pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::new();
     let filter = compile_expr(&mut ctx, &expr.expr)?;
@@ -54,6 +71,18 @@ impl FilterCtx {
             var_map: HashMap::new(),
             var_names: Vec::new(),
         }
+    }
+
+    /// Create a context pre-populated with schema field names.
+    /// The field_names Vec provides the name → index mapping.
+    fn with_schema(field_names: &[&str]) -> Self {
+        let mut var_map = HashMap::with_capacity(field_names.len());
+        let mut var_names = Vec::with_capacity(field_names.len());
+        for (idx, name) in field_names.iter().enumerate() {
+            var_map.insert((*name).to_string(), idx);
+            var_names.push((*name).to_string());
+        }
+        Self { var_map, var_names }
     }
 
     fn var_idx(&mut self, name: &str) -> usize {
