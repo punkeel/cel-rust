@@ -223,11 +223,16 @@ fn resolve_expr(expr: &mut Expr, resolver: &FunctionResolver<'_>) {
 
             // Try to resolve this call
             let member = call.target.is_some();
-            let arg_hints: Vec<_> = call
+            let mut arg_hints: Vec<_> = call
                 .args
                 .iter()
                 .map(|a| expr_type_hint(&a.expr))
                 .collect();
+            if member {
+                if let Some(target) = &call.target {
+                    arg_hints.insert(0, expr_type_hint(&target.expr));
+                }
+            }
 
             call.resolved_op = resolver.resolve_op(&call.func_name, member, &arg_hints);
         }
