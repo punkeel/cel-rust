@@ -10,6 +10,7 @@ pub mod reg_closure_vm;
 pub mod reg_compiler;
 pub mod reg_fast_vm;
 pub mod reg_vm;
+pub mod ruleset;
 pub mod vm;
 
 pub use bytecode::Program;

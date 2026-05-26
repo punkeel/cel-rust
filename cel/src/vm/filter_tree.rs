@@ -223,6 +223,50 @@ impl BoolFilter for GeIntConst {
     }
 }
 
+// ---------- Arithmetic + comparison fused structs ----------
+// These inline the arithmetic operation into the comparison, eliminating
+// I64Expr::eval() recursion overhead.  Used for patterns like `port + 100 >= 1024`.
+
+macro_rules! define_arith_cmp {
+    ($name:ident, $arith_op:ident, $cmp_op:tt) => {
+        pub struct $name {
+            pub var_idx: usize,
+            pub arith: i64,
+            pub cmp: i64,
+        }
+        impl BoolFilter for $name {
+            #[inline(always)]
+            fn eval(&self, vars: &[Value]) -> bool {
+                match vars.get(self.var_idx) {
+                    Some(Value::Int(i)) => i.$arith_op(self.arith) $cmp_op self.cmp,
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+
+define_arith_cmp!(AddConstEq, wrapping_add, ==);
+define_arith_cmp!(AddConstNe, wrapping_add, !=);
+define_arith_cmp!(AddConstLt, wrapping_add, <);
+define_arith_cmp!(AddConstLe, wrapping_add, <=);
+define_arith_cmp!(AddConstGt, wrapping_add, >);
+define_arith_cmp!(AddConstGe, wrapping_add, >=);
+
+define_arith_cmp!(SubConstEq, wrapping_sub, ==);
+define_arith_cmp!(SubConstNe, wrapping_sub, !=);
+define_arith_cmp!(SubConstLt, wrapping_sub, <);
+define_arith_cmp!(SubConstLe, wrapping_sub, <=);
+define_arith_cmp!(SubConstGt, wrapping_sub, >);
+define_arith_cmp!(SubConstGe, wrapping_sub, >=);
+
+define_arith_cmp!(MulConstEq, wrapping_mul, ==);
+define_arith_cmp!(MulConstNe, wrapping_mul, !=);
+define_arith_cmp!(MulConstLt, wrapping_mul, <);
+define_arith_cmp!(MulConstLe, wrapping_mul, <=);
+define_arith_cmp!(MulConstGt, wrapping_mul, >);
+define_arith_cmp!(MulConstGe, wrapping_mul, >=);
+
 pub struct EqStrConst {
     pub var_idx: usize,
     pub val: String,
@@ -374,6 +418,32 @@ impl BoolFilter for ContainsConst {
     }
 }
 
+/// Multi-pattern contains using naive search (str::contains in a loop).
+/// Faster than Aho-Corasick for very small pattern counts (≤4) on short strings.
+pub struct ContainsAny {
+    pub var_idx: usize,
+    pub needles: Vec<String>,
+}
+
+impl BoolFilter for ContainsAny {
+    #[inline(always)]
+    fn eval(&self, vars: &[Value]) -> bool {
+        match vars.get(self.var_idx) {
+            Some(Value::String(s)) => {
+                let text = s.as_str();
+                // Unroll-like: the compiler usually unrolls this for small Vecs
+                for needle in &self.needles {
+                    if text.contains(needle.as_str()) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Multi-pattern contains using Aho-Corasick.
 /// Scans the input string once for all patterns simultaneously.
 pub struct AhoCorasickContains {
@@ -387,10 +457,17 @@ impl BoolFilter for AhoCorasickContains {
     fn eval(&self, vars: &[Value]) -> bool {
         match vars.get(self.var_idx) {
             Some(Value::String(s)) => {
+                let text = s.as_bytes();
+                // Fast path: OR semantics (any single match is enough).
+                // is_match() is measurably faster than find_iter() for simple yes/no.
+                if self.min_matches <= 1 {
+                    return self.automaton.is_match(text);
+                }
+                // AND semantics: need N distinct patterns to match.
                 // Track which patterns matched using a small stack bitset.
-                // Supports up to 64 patterns (more than enough for practical CEL rules).
+                // Supports up to 64 patterns.
                 let mut matched = 0u64;
-                for mat in self.automaton.find_iter(s.as_bytes()) {
+                for mat in self.automaton.find_iter(text) {
                     let pid = mat.pattern().as_u64();
                     if pid < 64 {
                         matched |= 1u64 << pid;

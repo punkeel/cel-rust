@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Index - Criterion.rs</title>
+    <style type="text/css">
+        body {
+            font: 14px Helvetica Neue;
+            text-rendering: optimizelegibility;
+        }
+
+        .body {
+            width: 960px;
+            margin: auto;
+        }
+
+        a:link {
+            color: #1F78B4;
+            text-decoration: none;
+        }
+
+        h2 {
+            font-size: 36px;
+            font-weight: 300;
+        }
+
+        h3 {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        #footer {
+            height: 40px;
+            background: #888;
+            color: white;
+            font-size: larger;
+            font-weight: 300;
+        }
+
+        #footer a {
+            color: white;
+            text-decoration: underline;
+        }
+
+        #footer p {
+            text-align: center
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #888;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="body">
+        <h2>Criterion.rs Benchmark Index</h2>
+        See individual benchmark pages below for more details.
+        <ul>
+            <li><a href="../all list/report/index.html">all list</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../all list/ast/report/index.html">ast</a></th>
+                            <th><a href="../all list/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../all list/10/report/index.html">10</a></th>
+                            <td><a href="../all list/ast/10/report/index.html">all list/ast/10</a></td>
+                            <td><a href="../all list/vm/10/report/index.html">all list/vm/10</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../all list/100/report/index.html">100</a></th>
+                            <td><a href="../all list/ast/100/report/index.html">all list/ast/100</a></td>
+                            <td><a href="../all list/vm/100/report/index.html">all list/vm/100</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../all list/1000/report/index.html">1000</a></th>
+                            <td><a href="../all list/ast/1000/report/index.html">all list/ast/1000</a></td>
+                            <td><a href="../all list/vm/1000/report/index.html">all list/vm/1000</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../all list/10000/report/index.html">10000</a></th>
+                            <td><a href="../all list/ast/10000/report/index.html">all list/ast/10000</a></td>
+                            <td><a href="../all list/vm/10000/report/index.html">all list/vm/10000</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../arithmetic/report/index.html">arithmetic</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../arithmetic/ast/report/index.html">ast</a></th>
+                            <th><a href="../arithmetic/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../arithmetic/add2/report/index.html">add2</a></th>
+                            <td><a href="../arithmetic/ast/add2/report/index.html">arithmetic/ast/add2</a></td>
+                            <td><a href="../arithmetic/vm/add2/report/index.html">arithmetic/vm/add2</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../arithmetic/add3/report/index.html">add3</a></th>
+                            <td><a href="../arithmetic/ast/add3/report/index.html">arithmetic/ast/add3</a></td>
+                            <td><a href="../arithmetic/vm/add3/report/index.html">arithmetic/vm/add3</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../arithmetic/mixed/report/index.html">mixed</a></th>
+                            <td><a href="../arithmetic/ast/mixed/report/index.html">arithmetic/ast/mixed</a></td>
+                            <td><a href="../arithmetic/vm/mixed/report/index.html">arithmetic/vm/mixed</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../arithmetic/mul_chain/report/index.html">mul_chain</a></th>
+                            <td><a href="../arithmetic/ast/mul_chain/report/index.html">arithmetic/ast/mul_chain</a></td>
+                            <td><a href="../arithmetic/vm/mul_chain/report/index.html">arithmetic/vm/mul_chain</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../arithmetic/poly/report/index.html">poly</a></th>
+                            <td><a href="../arithmetic/ast/poly/report/index.html">arithmetic/ast/poly</a></td>
+                            <td><a href="../arithmetic/vm/poly/report/index.html">arithmetic/vm/poly</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../complex_bool/report/index.html">complex_bool</a></li>
+            
+            <ul>
+                <li><a href="../complex_bool/ast/report/index.html">ast</a></li>
+                <li><a href="../complex_bool/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../complex_bool/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../complex_bool/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../complex_bool/vm/report/index.html">vm</a></li>
+                <li><a href="../complex_bool/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../compound_and/report/index.html">compound_and</a></li>
+            
+            <ul>
+                <li><a href="../compound_and/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../compound_and/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../compound_and/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../compound_and/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../deep_access/report/index.html">deep_access</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../deep_access/ast/report/index.html">ast</a></th>
+                            <th><a href="../deep_access/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/depth_1/report/index.html">depth_1</a></th>
+                            <td><a href="../deep_access/ast/depth_1/report/index.html">deep_access/ast/depth_1</a></td>
+                            <td><a href="../deep_access/vm/depth_1/report/index.html">deep_access/vm/depth_1</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/depth_2/report/index.html">depth_2</a></th>
+                            <td><a href="../deep_access/ast/depth_2/report/index.html">deep_access/ast/depth_2</a></td>
+                            <td><a href="../deep_access/vm/depth_2/report/index.html">deep_access/vm/depth_2</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/depth_3/report/index.html">depth_3</a></th>
+                            <td><a href="../deep_access/ast/depth_3/report/index.html">deep_access/ast/depth_3</a></td>
+                            <td><a href="../deep_access/vm/depth_3/report/index.html">deep_access/vm/depth_3</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/depth_4/report/index.html">depth_4</a></th>
+                            <td><a href="../deep_access/ast/depth_4/report/index.html">deep_access/ast/depth_4</a></td>
+                            <td><a href="../deep_access/vm/depth_4/report/index.html">deep_access/vm/depth_4</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/has_depth_2/report/index.html">has_depth_2</a></th>
+                            <td><a href="../deep_access/ast/has_depth_2/report/index.html">deep_access/ast/has_depth_2</a></td>
+                            <td><a href="../deep_access/vm/has_depth_2/report/index.html">deep_access/vm/has_depth_2</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../deep_access/has_depth_3/report/index.html">has_depth_3</a></th>
+                            <td><a href="../deep_access/ast/has_depth_3/report/index.html">deep_access/ast/has_depth_3</a></td>
+                            <td><a href="../deep_access/vm/has_depth_3/report/index.html">deep_access/vm/has_depth_3</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../filter list/report/index.html">filter list</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../filter list/ast/report/index.html">ast</a></th>
+                            <th><a href="../filter list/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../filter list/10/report/index.html">10</a></th>
+                            <td><a href="../filter list/ast/10/report/index.html">filter list/ast/10</a></td>
+                            <td><a href="../filter list/vm/10/report/index.html">filter list/vm/10</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../filter list/100/report/index.html">100</a></th>
+                            <td><a href="../filter list/ast/100/report/index.html">filter list/ast/100</a></td>
+                            <td><a href="../filter list/vm/100/report/index.html">filter list/vm/100</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../filter list/1000/report/index.html">1000</a></th>
+                            <td><a href="../filter list/ast/1000/report/index.html">filter list/ast/1000</a></td>
+                            <td><a href="../filter list/vm/1000/report/index.html">filter list/vm/1000</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../filter list/10000/report/index.html">10000</a></th>
+                            <td><a href="../filter list/ast/10000/report/index.html">filter list/ast/10000</a></td>
+                            <td><a href="../filter list/vm/10000/report/index.html">filter list/vm/10000</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../http.user_agent_cel/report/index.html">http.user_agent/cel</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../http.user_agent_cel/ast/report/index.html">ast</a></th>
+                            <th><a href="../http.user_agent_cel/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../http.user_agent_cel/contains/report/index.html">contains</a></th>
+                            <td><a href="../http.user_agent_cel/ast/contains/report/index.html">http.user_agent/cel/ast/contains</a></td>
+                            <td><a href="../http.user_agent_cel/vm/contains/report/index.html">http.user_agent/cel/vm/contains</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../http.user_agent_cel/regex_complex/report/index.html">regex_complex</a></th>
+                            <td><a href="../http.user_agent_cel/ast/regex_complex/report/index.html">http.user_agent/cel/ast/regex_complex</a></td>
+                            <td><a href="../http.user_agent_cel/vm/regex_complex/report/index.html">http.user_agent/cel/vm/regex_complex</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../http.user_agent_cel/regex_simple/report/index.html">regex_simple</a></th>
+                            <td><a href="../http.user_agent_cel/ast/regex_simple/report/index.html">http.user_agent/cel/ast/regex_simple</a></td>
+                            <td><a href="../http.user_agent_cel/vm/regex_simple/report/index.html">http.user_agent/cel/vm/regex_simple</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../http.user_agent_exec/report/index.html">http.user_agent/exec</a></li>
+            
+            <ul>
+                <li><a href="../http.user_agent_exec/http.user_agent contains _Googlebot___Mozilla_5.0 (X11; Linux x8/report/index.html">http.user_agent contains &quot;Googlebot&quot;/&quot;Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36&quot;_wirefilter</a></li>
+                <li><a href="../http.user_agent_exec/http.user_agent contains _Googlebot___Mozilla_5.0 AppleWebKit_53/report/index.html">http.user_agent contains &quot;Googlebot&quot;/&quot;Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Safari/537.36&quot;_wirefilter</a></li>
+                <li><a href="../http.user_agent_exec/http.user_agent ~ _(_i)googlebot__d+_._d+___Mozilla_5.0 (X11; Li/report/index.html">http.user_agent ~ &quot;(?i)googlebot/\d+\.\d+&quot;/&quot;Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36&quot;_wirefilter</a></li>
+                <li><a href="../http.user_agent_exec/http.user_agent ~ _(_i)googlebot__d+_._d+___Mozilla_5.0 AppleWeb/report/index.html">http.user_agent ~ &quot;(?i)googlebot/\d+\.\d+&quot;/&quot;Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Safari/537.36&quot;_wirefilter</a></li>
+                <li><a href="../http.user_agent_exec/http.user_agent ~ _Googlebot___Mozilla_5.0 (X11; Linux x86_64) A/report/index.html">http.user_agent ~ &quot;Googlebot&quot;/&quot;Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36&quot;_wirefilter</a></li>
+                <li><a href="../http.user_agent_exec/http.user_agent ~ _Googlebot___Mozilla_5.0 AppleWebKit_537.36 (K/report/index.html">http.user_agent ~ &quot;Googlebot&quot;/&quot;Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Safari/537.36&quot;_wirefilter</a></li>
+            </ul>
+            <li>http.user_agent/parse</li>
+            
+            <ul>
+                <li><a href="../http.user_agent_parse/http.user_agent contains _Googlebot_/report/index.html">http.user_agent contains &quot;Googlebot&quot;</a></li>
+                <li><a href="../http.user_agent_parse/http.user_agent ~ _(_i)googlebot__d+_._d+_/report/index.html">http.user_agent ~ &quot;(?i)googlebot/\d+\.\d+&quot;</a></li>
+                <li><a href="../http.user_agent_parse/http.user_agent ~ _Googlebot_/report/index.html">http.user_agent ~ &quot;Googlebot&quot;</a></li>
+            </ul>
+            <li><a href="../in_set/report/index.html">in_set</a></li>
+            
+            <ul>
+                <li><a href="../in_set/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../in_set/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../in_set/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../in_set/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li>inline_vs_call</li>
+            
+            <ul>
+                <li><a href="../inline_vs_call/direct_inline/report/index.html">direct_inline</a></li>
+            </ul>
+            <li><a href="../int_eq/report/index.html">int_eq</a></li>
+            
+            <ul>
+                <li><a href="../int_eq/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../int_eq/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../int_eq/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../int_eq/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../int_range/report/index.html">int_range</a></li>
+            
+            <ul>
+                <li><a href="../int_range/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../int_range/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../int_range/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../int_range/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../ip.addr_exec/report/index.html">ip.addr/exec</a></li>
+            
+            <ul>
+                <li><a href="../ip.addr_exec/ip.addr == 173.245.48.1_127.0.0.1_wirefilter/report/index.html">ip.addr == 173.245.48.1/127.0.0.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 173.245.48.1_173.245.48.1_wirefilter/report/index.html">ip.addr == 173.245.48.1/173.245.48.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 173.245.48.1_2001_db8_85a3__8a2e_370_7334_wirefilter/report/index.html">ip.addr == 173.245.48.1/2001:db8:85a3::8a2e:370:7334_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 173.245.48.1_2606_4700_4700__1111_wirefilter/report/index.html">ip.addr == 173.245.48.1/2606:4700:4700::1111_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 2606_4700_4700__1111_127.0.0.1_wirefilter/report/index.html">ip.addr == 2606:4700:4700::1111/127.0.0.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 2606_4700_4700__1111_173.245.48.1_wirefilter/report/index.html">ip.addr == 2606:4700:4700::1111/173.245.48.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 2606_4700_4700__1111_2001_db8_85a3__8a2e_370_7334_wir/report/index.html">ip.addr == 2606:4700:4700::1111/2001:db8:85a3::8a2e:370:7334_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr == 2606_4700_4700__1111_2606_4700_4700__1111_wirefilter/report/index.html">ip.addr == 2606:4700:4700::1111/2606:4700:4700::1111_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 173.245.48.0 &amp;&amp; ip.addr _ 173.245.49.0_127.0.0.1_wire/report/index.html">ip.addr &gt;= 173.245.48.0 &amp;&amp; ip.addr &lt; 173.245.49.0/127.0.0.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 173.245.48.0 &amp;&amp; ip.addr _ 173.245.49.0_173.245.48.1_w/report/index.html">ip.addr &gt;= 173.245.48.0 &amp;&amp; ip.addr &lt; 173.245.49.0/173.245.48.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 173.245.48.0 &amp;&amp; ip.addr _ 173.245.49.0_2001_db8_85a3_/report/index.html">ip.addr &gt;= 173.245.48.0 &amp;&amp; ip.addr &lt; 173.245.49.0/2001:db8:85a3::8a2e:370:7334_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 173.245.48.0 &amp;&amp; ip.addr _ 173.245.49.0_2606_4700_4700/report/index.html">ip.addr &gt;= 173.245.48.0 &amp;&amp; ip.addr &lt; 173.245.49.0/2606:4700:4700::1111_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 2606_4700__ &amp;&amp; ip.addr _ 2606_4701___127.0.0.1_wirefi/report/index.html">ip.addr &gt;= 2606:4700:: &amp;&amp; ip.addr &lt; 2606:4701::/127.0.0.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 2606_4700__ &amp;&amp; ip.addr _ 2606_4701___173.245.48.1_wir/report/index.html">ip.addr &gt;= 2606:4700:: &amp;&amp; ip.addr &lt; 2606:4701::/173.245.48.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 2606_4700__ &amp;&amp; ip.addr _ 2606_4701___2001_db8_85a3__8/report/index.html">ip.addr &gt;= 2606:4700:: &amp;&amp; ip.addr &lt; 2606:4701::/2001:db8:85a3::8a2e:370:7334_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr _= 2606_4700__ &amp;&amp; ip.addr _ 2606_4701___2606_4700_4700__/report/index.html">ip.addr &gt;= 2606:4700:: &amp;&amp; ip.addr &lt; 2606:4701::/2606:4700:4700::1111_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr in ..._127.0.0.1_wirefilter/report/index.html">ip.addr in .../127.0.0.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr in ..._173.245.48.1_wirefilter/report/index.html">ip.addr in .../173.245.48.1_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr in ..._2001_db8_85a3__8a2e_370_7334_wirefilter/report/index.html">ip.addr in .../2001:db8:85a3::8a2e:370:7334_wirefilter</a></li>
+                <li><a href="../ip.addr_exec/ip.addr in ..._2606_4700_4700__1111_wirefilter/report/index.html">ip.addr in .../2606:4700:4700::1111_wirefilter</a></li>
+            </ul>
+            <li>ip.addr/parse</li>
+            
+            <ul>
+                <li><a href="../ip.addr_parse/ip.addr == 173.245.48.1/report/index.html">ip.addr == 173.245.48.1</a></li>
+                <li><a href="../ip.addr_parse/ip.addr == 2606_4700_4700__1111/report/index.html">ip.addr == 2606:4700:4700::1111</a></li>
+                <li><a href="../ip.addr_parse/ip.addr _= 173.245.48.0 &amp;&amp; ip.addr _ 173.245.49.0/report/index.html">ip.addr &gt;= 173.245.48.0 &amp;&amp; ip.addr &lt; 173.245.49.0</a></li>
+                <li><a href="../ip.addr_parse/ip.addr _= 2606_4700__ &amp;&amp; ip.addr _ 2606_4701__/report/index.html">ip.addr &gt;= 2606:4700:: &amp;&amp; ip.addr &lt; 2606:4701::</a></li>
+                <li><a href="../ip.addr_parse/ip.addr in .../report/index.html">ip.addr in ...</a></li>
+            </ul>
+            <li><a href="../ip.geoip.country_exec/report/index.html">ip.geoip.country/exec</a></li>
+            
+            <ul>
+                <li><a href="../ip.geoip.country_exec/ip.geoip.country == _GB___GB__wirefilter/report/index.html">ip.geoip.country == &quot;GB&quot;/&quot;GB&quot;_wirefilter</a></li>
+                <li><a href="../ip.geoip.country_exec/ip.geoip.country == _GB___T1__wirefilter/report/index.html">ip.geoip.country == &quot;GB&quot;/&quot;T1&quot;_wirefilter</a></li>
+                <li><a href="../ip.geoip.country_exec/ip.geoip.country in ...__GB__wirefilter/report/index.html">ip.geoip.country in .../&quot;GB&quot;_wirefilter</a></li>
+                <li><a href="../ip.geoip.country_exec/ip.geoip.country in ...__T1__wirefilter/report/index.html">ip.geoip.country in .../&quot;T1&quot;_wirefilter</a></li>
+            </ul>
+            <li>ip.geoip.country/parse</li>
+            
+            <ul>
+                <li><a href="../ip.geoip.country_parse/ip.geoip.country == _GB_/report/index.html">ip.geoip.country == &quot;GB&quot;</a></li>
+                <li><a href="../ip.geoip.country_parse/ip.geoip.country in .../report/index.html">ip.geoip.country in ...</a></li>
+            </ul>
+            <li><a href="../large_in_set/report/index.html">large_in_set</a></li>
+            
+            <ul>
+                <li><a href="../large_in_set/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../large_in_set/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../large_in_set/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../large_in_set/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../map list/report/index.html">map list</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../map list/ast/report/index.html">ast</a></th>
+                            <th><a href="../map list/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../map list/10/report/index.html">10</a></th>
+                            <td><a href="../map list/ast/10/report/index.html">map list/ast/10</a></td>
+                            <td><a href="../map list/vm/10/report/index.html">map list/vm/10</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../map list/100/report/index.html">100</a></th>
+                            <td><a href="../map list/ast/100/report/index.html">map list/ast/100</a></td>
+                            <td><a href="../map list/vm/100/report/index.html">map list/vm/100</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../map list/1000/report/index.html">1000</a></th>
+                            <td><a href="../map list/ast/1000/report/index.html">map list/ast/1000</a></td>
+                            <td><a href="../map list/vm/1000/report/index.html">map list/vm/1000</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../map list/10000/report/index.html">10000</a></th>
+                            <td><a href="../map list/ast/10000/report/index.html">map list/ast/10000</a></td>
+                            <td><a href="../map list/vm/10000/report/index.html">map list/vm/10000</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../micro/report/index.html">micro</a></li>
+            
+            <ul>
+                <li><a href="../micro/ast arith/report/index.html">ast arith</a></li>
+                <li><a href="../micro/ast index/report/index.html">ast index</a></li>
+                <li><a href="../micro/ast select/report/index.html">ast select</a></li>
+                <li><a href="../micro/vm arith/report/index.html">vm arith</a></li>
+                <li><a href="../micro/vm index/report/index.html">vm index</a></li>
+                <li><a href="../micro/vm select/report/index.html">vm select</a></li>
+            </ul>
+            <li><a href="../not_eq/report/index.html">not_eq</a></li>
+            
+            <ul>
+                <li><a href="../not_eq/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../not_eq/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../not_eq/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../not_eq/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../or_eq/report/index.html">or_eq</a></li>
+            
+            <ul>
+                <li><a href="../or_eq/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../or_eq/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../or_eq/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../or_eq/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../port_eq_80_components/report/index.html">port_eq_80_components</a></li>
+            
+            <ul>
+                <li><a href="../port_eq_80_components/enum_filter/report/index.html">enum_filter</a></li>
+                <li><a href="../port_eq_80_components/filter_tree/report/index.html">filter_tree</a></li>
+                <li><a href="../port_eq_80_components/raw_i64_eq/report/index.html">raw_i64_eq</a></li>
+                <li><a href="../port_eq_80_components/reg_closure_vm/report/index.html">reg_closure_vm</a></li>
+                <li><a href="../port_eq_80_components/reg_fast_vm/report/index.html">reg_fast_vm</a></li>
+                <li><a href="../port_eq_80_components/reg_vm/report/index.html">reg_vm</a></li>
+                <li><a href="../port_eq_80_components/vm_fresh_state/report/index.html">vm_fresh_state</a></li>
+                <li><a href="../port_eq_80_components/vm_reused_state/report/index.html">vm_reused_state</a></li>
+            </ul>
+            <li><a href="../reg_vs_stack/report/index.html">reg_vs_stack</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th>enum_filter</th>
+                            <th><a href="../reg_vs_stack/reg/report/index.html">reg</a></th>
+                            <th><a href="../reg_vs_stack/reg_closure/report/index.html">reg_closure</a></th>
+                            <th><a href="../reg_vs_stack/reg_fast/report/index.html">reg_fast</a></th>
+                            <th><a href="../reg_vs_stack/stack/report/index.html">stack</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../reg_vs_stack/arith/report/index.html">arith</a></th>
+                            <td><a href="../reg_vs_stack/enum_filter/arith/report/index.html">reg_vs_stack/enum_filter/arith</a></td>
+                            <td><a href="../reg_vs_stack/reg/arith/report/index.html">reg_vs_stack/reg/arith</a></td>
+                            <td><a href="../reg_vs_stack/reg_closure/arith/report/index.html">reg_vs_stack/reg_closure/arith</a></td>
+                            <td><a href="../reg_vs_stack/reg_fast/arith/report/index.html">reg_vs_stack/reg_fast/arith</a></td>
+                            <td><a href="../reg_vs_stack/stack/arith/report/index.html">reg_vs_stack/stack/arith</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../reg_vs_stack/logic/report/index.html">logic</a></th>
+                            <td><a href="../reg_vs_stack/reg/logic/report/index.html">reg_vs_stack/reg/logic</a></td>
+                            <td><a href="../reg_vs_stack/reg_closure/logic/report/index.html">reg_vs_stack/reg_closure/logic</a></td>
+                            <td><a href="../reg_vs_stack/reg_fast/logic/report/index.html">reg_vs_stack/reg_fast/logic</a></td>
+                            <td><a href="../reg_vs_stack/stack/logic/report/index.html">reg_vs_stack/stack/logic</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../reg_vs_stack/port_eq_80/report/index.html">port_eq_80</a></th>
+                            <td><a href="../reg_vs_stack/enum_filter/port_eq_80/report/index.html">reg_vs_stack/enum_filter/port_eq_80</a></td>
+                            <td><a href="../reg_vs_stack/reg/port_eq_80/report/index.html">reg_vs_stack/reg/port_eq_80</a></td>
+                            <td><a href="../reg_vs_stack/reg_closure/port_eq_80/report/index.html">reg_vs_stack/reg_closure/port_eq_80</a></td>
+                            <td><a href="../reg_vs_stack/reg_fast/port_eq_80/report/index.html">reg_vs_stack/reg_fast/port_eq_80</a></td>
+                            <td><a href="../reg_vs_stack/stack/port_eq_80/report/index.html">reg_vs_stack/stack/port_eq_80</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../reg_vs_stack/port_ge_1024/report/index.html">port_ge_1024</a></th>
+                            <td><a href="../reg_vs_stack/enum_filter/port_ge_1024/report/index.html">reg_vs_stack/enum_filter/port_ge_1024</a></td>
+                            <td><a href="../reg_vs_stack/reg/port_ge_1024/report/index.html">reg_vs_stack/reg/port_ge_1024</a></td>
+                            <td><a href="../reg_vs_stack/reg_closure/port_ge_1024/report/index.html">reg_vs_stack/reg_closure/port_ge_1024</a></td>
+                            <td><a href="../reg_vs_stack/reg_fast/port_ge_1024/report/index.html">reg_vs_stack/reg_fast/port_ge_1024</a></td>
+                            <td><a href="../reg_vs_stack/stack/port_ge_1024/report/index.html">reg_vs_stack/stack/port_ge_1024</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../regex/report/index.html">regex</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../regex/ast/report/index.html">ast</a></th>
+                            <th><a href="../regex/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../regex/match_email/report/index.html">match_email</a></th>
+                            <td><a href="../regex/ast/match_email/report/index.html">regex/ast/match_email</a></td>
+                            <td><a href="../regex/vm/match_email/report/index.html">regex/vm/match_email</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../regex/match_ip/report/index.html">match_ip</a></th>
+                            <td><a href="../regex/ast/match_ip/report/index.html">regex/ast/match_ip</a></td>
+                            <td><a href="../regex/vm/match_ip/report/index.html">regex/vm/match_ip</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../regex/match_uuid/report/index.html">match_uuid</a></th>
+                            <td><a href="../regex/ast/match_uuid/report/index.html">regex/ast/match_uuid</a></td>
+                            <td><a href="../regex/vm/match_uuid/report/index.html">regex/vm/match_uuid</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../scalar/report/index.html">scalar</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../scalar/ast/report/index.html">ast</a></th>
+                            <th><a href="../scalar/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_index/report/index.html">return_index</a></th>
+                            <td><a href="../scalar/ast/return_index/report/index.html">scalar/ast/return_index</a></td>
+                            <td><a href="../scalar/vm/return_index/report/index.html">scalar/vm/return_index</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_int/report/index.html">return_int</a></th>
+                            <td><a href="../scalar/ast/return_int/report/index.html">scalar/ast/return_int</a></td>
+                            <td><a href="../scalar/vm/return_int/report/index.html">scalar/vm/return_int</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_select/report/index.html">return_select</a></th>
+                            <td><a href="../scalar/ast/return_select/report/index.html">scalar/ast/return_select</a></td>
+                            <td><a href="../scalar/vm/return_select/report/index.html">scalar/vm/return_select</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_str/report/index.html">return_str</a></th>
+                            <td><a href="../scalar/ast/return_str/report/index.html">scalar/ast/return_str</a></td>
+                            <td><a href="../scalar/vm/return_str/report/index.html">scalar/vm/return_str</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_ternary_int/report/index.html">return_ternary_int</a></th>
+                            <td><a href="../scalar/ast/return_ternary_int/report/index.html">scalar/ast/return_ternary_int</a></td>
+                            <td><a href="../scalar/vm/return_ternary_int/report/index.html">scalar/vm/return_ternary_int</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_var_int/report/index.html">return_var_int</a></th>
+                            <td><a href="../scalar/ast/return_var_int/report/index.html">scalar/ast/return_var_int</a></td>
+                            <td><a href="../scalar/vm/return_var_int/report/index.html">scalar/vm/return_var_int</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../scalar/return_var_str/report/index.html">return_var_str</a></th>
+                            <td><a href="../scalar/ast/return_var_str/report/index.html">scalar/ast/return_var_str</a></td>
+                            <td><a href="../scalar/vm/return_var_str/report/index.html">scalar/vm/return_var_str</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../str_eq/report/index.html">str_eq</a></li>
+            
+            <ul>
+                <li><a href="../str_eq/cel_ast/report/index.html">cel_ast</a></li>
+                <li><a href="../str_eq/cel_filter_tree/report/index.html">cel_filter_tree</a></li>
+                <li><a href="../str_eq/cel_vm/report/index.html">cel_vm</a></li>
+                <li><a href="../str_eq/wirefilter/report/index.html">wirefilter</a></li>
+            </ul>
+            <li><a href="../string_ops/report/index.html">string_ops</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../string_ops/ast/report/index.html">ast</a></th>
+                            <th><a href="../string_ops/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/concat/report/index.html">concat</a></th>
+                            <td><a href="../string_ops/ast/concat/report/index.html">string_ops/ast/concat</a></td>
+                            <td><a href="../string_ops/vm/concat/report/index.html">string_ops/vm/concat</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/contains/report/index.html">contains</a></th>
+                            <td><a href="../string_ops/ast/contains/report/index.html">string_ops/ast/contains</a></td>
+                            <td><a href="../string_ops/vm/contains/report/index.html">string_ops/vm/contains</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/ends_with/report/index.html">ends_with</a></th>
+                            <td><a href="../string_ops/ast/ends_with/report/index.html">string_ops/ast/ends_with</a></td>
+                            <td><a href="../string_ops/vm/ends_with/report/index.html">string_ops/vm/ends_with</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/size_dynamic/report/index.html">size_dynamic</a></th>
+                            <td><a href="../string_ops/ast/size_dynamic/report/index.html">string_ops/ast/size_dynamic</a></td>
+                            <td><a href="../string_ops/vm/size_dynamic/report/index.html">string_ops/vm/size_dynamic</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/size_static/report/index.html">size_static</a></th>
+                            <td><a href="../string_ops/ast/size_static/report/index.html">string_ops/ast/size_static</a></td>
+                            <td><a href="../string_ops/vm/size_static/report/index.html">string_ops/vm/size_static</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/starts_with/report/index.html">starts_with</a></th>
+                            <td><a href="../string_ops/ast/starts_with/report/index.html">string_ops/ast/starts_with</a></td>
+                            <td><a href="../string_ops/vm/starts_with/report/index.html">string_ops/vm/starts_with</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../string_ops/triple_eq/report/index.html">triple_eq</a></th>
+                            <td><a href="../string_ops/ast/triple_eq/report/index.html">string_ops/ast/triple_eq</a></td>
+                            <td><a href="../string_ops/vm/triple_eq/report/index.html">string_ops/vm/triple_eq</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../tcp.port_cel/report/index.html">tcp.port/cel</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../tcp.port_cel/ast/report/index.html">ast</a></th>
+                            <th><a href="../tcp.port_cel/vm/report/index.html">vm</a></th>
+                        </tr>
+                        <tr>
+                            <th><a href="../tcp.port_cel/eq_80/report/index.html">eq_80</a></th>
+                            <td><a href="../tcp.port_cel/ast/eq_80/report/index.html">tcp.port/cel/ast/eq_80</a></td>
+                            <td><a href="../tcp.port_cel/vm/eq_80/report/index.html">tcp.port/cel/vm/eq_80</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../tcp.port_cel/ge_1024/report/index.html">ge_1024</a></th>
+                            <td><a href="../tcp.port_cel/ast/ge_1024/report/index.html">tcp.port/cel/ast/ge_1024</a></td>
+                            <td><a href="../tcp.port_cel/vm/ge_1024/report/index.html">tcp.port/cel/vm/ge_1024</a></td>
+                        </tr>
+                        <tr>
+                            <th><a href="../tcp.port_cel/in_set/report/index.html">in_set</a></th>
+                            <td><a href="../tcp.port_cel/ast/in_set/report/index.html">tcp.port/cel/ast/in_set</a></td>
+                            <td><a href="../tcp.port_cel/vm/in_set/report/index.html">tcp.port/cel/vm/in_set</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../tcp.port_exec/report/index.html">tcp.port/exec</a></li>
+            
+            <ul>
+                <li><a href="../tcp.port_exec/tcp.port == 80_8081_wirefilter/report/index.html">tcp.port == 80/8081_wirefilter</a></li>
+                <li><a href="../tcp.port_exec/tcp.port == 80_80_wirefilter/report/index.html">tcp.port == 80/80_wirefilter</a></li>
+                <li><a href="../tcp.port_exec/tcp.port _= 1024_8081_wirefilter/report/index.html">tcp.port &gt;= 1024/8081_wirefilter</a></li>
+                <li><a href="../tcp.port_exec/tcp.port _= 1024_80_wirefilter/report/index.html">tcp.port &gt;= 1024/80_wirefilter</a></li>
+                <li><a href="../tcp.port_exec/tcp.port in ..._8081_wirefilter/report/index.html">tcp.port in .../8081_wirefilter</a></li>
+                <li><a href="../tcp.port_exec/tcp.port in ..._80_wirefilter/report/index.html">tcp.port in .../80_wirefilter</a></li>
+            </ul>
+            <li>tcp.port/parse</li>
+            
+            <ul>
+                <li><a href="../tcp.port_parse/tcp.port == 80/report/index.html">tcp.port == 80</a></li>
+                <li><a href="../tcp.port_parse/tcp.port _= 1024/report/index.html">tcp.port &gt;= 1024</a></li>
+                <li><a href="../tcp.port_parse/tcp.port in .../report/index.html">tcp.port in ...</a></li>
+            </ul>
+        </ul>
+    </div>
+    <div id="footer">
+        <p>This report was generated by
+            <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a>, a statistics-driven benchmarking
+            library in Rust.</p>
+    </div>
+</body>
+</html>

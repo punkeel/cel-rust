@@ -1,0 +1,1 @@
+{"group_id":"ip.addr/exec","function_id":"ip.addr == 2606:4700:4700::1111/127.0.0.1_wirefilter","value_str":null,"throughput":null,"full_id":"ip.addr/exec/ip.addr == 2606:4700:4700::1111/127.0.0.1_wirefilter","directory_name":"ip.addr_exec/ip.addr == 2606_4700_4700__1111_127.0.0.1_wirefilter","title":"ip.addr/exec/ip.addr == 2606:4700:4700::1111/127.0.0.1_wirefilter"}
