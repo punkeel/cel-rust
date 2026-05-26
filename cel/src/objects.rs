@@ -1060,16 +1060,26 @@ impl Value {
                             };
                         }
                         operators::EQUALS => {
-                            return Ok(bool(
-                                Value::resolve_val(&call.args[0], ctx)?
-                                    .eq(&Value::resolve_val(&call.args[1], ctx)?),
-                            ))
+                            let lhs = Value::resolve_val(&call.args[0], ctx)?;
+                            let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() == r.inner()));
+                            }
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelString>(), rhs.downcast_ref::<CelString>()) {
+                                return Ok(bool(l.inner() == r.inner()));
+                            }
+                            return Ok(bool(lhs.eq(&rhs)));
                         }
                         operators::NOT_EQUALS => {
-                            return Ok(bool(
-                                Value::resolve_val(&call.args[0], ctx)?
-                                    .ne(&Value::resolve_val(&call.args[1], ctx)?),
-                            ))
+                            let lhs = Value::resolve_val(&call.args[0], ctx)?;
+                            let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() != r.inner()));
+                            }
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelString>(), rhs.downcast_ref::<CelString>()) {
+                                return Ok(bool(l.inner() != r.inner()));
+                            }
+                            return Ok(bool(lhs.ne(&rhs)));
                         }
                         operators::INDEX | operators::OPT_INDEX => {
                             let mut is_optional = call.func_name == operators::OPT_INDEX;
@@ -1155,6 +1165,13 @@ impl Value {
                         operators::ADD => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                let result: CelInt = l.inner().checked_add(*r.inner())
+                                    .ok_or_else(|| ExecutionError::Overflow("add", Value::Int(*l.inner()), Value::Int(*r.inner())))?
+                                    .into();
+                                let result: Box<dyn Val> = Box::new(result);
+                                return Ok(Cow::Owned(result));
+                            }
                             return Ok(Cow::Owned(
                                 lhs.as_ref()
                                     .as_adder()
@@ -1236,6 +1253,9 @@ impl Value {
                         operators::LESS => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() < r.inner()));
+                            }
                             return Ok(bool(
                                 lhs.as_comparer()
                                     .ok_or(ExecutionError::NoSuchOverload)?
@@ -1246,6 +1266,9 @@ impl Value {
                         operators::LESS_EQUALS => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() <= r.inner()));
+                            }
                             return if lhs
                                 .as_comparer()
                                 .ok_or(ExecutionError::NoSuchOverload)?
@@ -1260,6 +1283,9 @@ impl Value {
                         operators::GREATER => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() > r.inner()));
+                            }
                             return Ok(bool(
                                 lhs.as_comparer()
                                     .ok_or(ExecutionError::NoSuchOverload)?
@@ -1270,6 +1296,9 @@ impl Value {
                         operators::GREATER_EQUALS => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
+                            if let (Some(l), Some(r)) = (lhs.downcast_ref::<CelInt>(), rhs.downcast_ref::<CelInt>()) {
+                                return Ok(bool(l.inner() >= r.inner()));
+                            }
                             return if lhs
                                 .as_comparer()
                                 .ok_or(ExecutionError::NoSuchOverload)?
