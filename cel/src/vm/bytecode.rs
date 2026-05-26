@@ -1,5 +1,4 @@
 use crate::objects::Value;
-use std::sync::Mutex;
 
 /// A bytecode instruction.
 /// Operands are stored inline; multi-operand instructions use wide encoding.
@@ -68,8 +67,6 @@ pub struct Program {
     pub constants: Vec<Value>,
     pub var_names: Vec<String>,
     pub instructions: Vec<Instr>,
-    /// Cached variable values resolved from context to avoid repeated conversions.
-    pub var_cache: Mutex<Vec<Option<Value>>>,
 }
 
 impl Clone for Program {
@@ -78,7 +75,6 @@ impl Clone for Program {
             constants: self.constants.clone(),
             var_names: self.var_names.clone(),
             instructions: self.instructions.clone(),
-            var_cache: Mutex::new(vec![None; self.var_names.len()]),
         }
     }
 }

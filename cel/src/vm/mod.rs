@@ -4,4 +4,4 @@ pub mod vm;
 
 pub use bytecode::Program;
 pub use compiler::compile;
-pub use vm::eval;
+pub use vm::{eval, EvalState};

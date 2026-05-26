@@ -4,23 +4,52 @@ use crate::vm::bytecode::{Instr, Program, IDX_ACCU, IDX_ITER_ELEM};
 use crate::ExecutionError;
 use std::sync::Arc;
 
-struct IterFrame {
+pub(crate) struct IterFrame {
     items: Arc<Vec<Value>>,
     idx: usize,
 }
 
-pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
-    let mut stack: Vec<Value> = Vec::with_capacity(64);
+pub struct EvalState {
+    pub stack: Vec<Value>,
+    pub iter_stack: Vec<IterFrame>,
+    pub vars: Vec<Option<Value>>,
+}
+
+impl EvalState {
+    pub fn new() -> Self {
+        Self {
+            stack: Vec::with_capacity(64),
+            iter_stack: Vec::new(),
+            vars: Vec::with_capacity(16),
+        }
+    }
+
+    fn reset(&mut self, program: &Program) {
+        self.stack.clear();
+        self.iter_stack.clear();
+        let need = program.var_names.len();
+        if self.vars.len() < need {
+            self.vars.resize_with(need, || None);
+        }
+    }
+}
+
+impl Default for EvalState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<Value, ExecutionError> {
+    state.reset(program);
+    let stack = &mut state.stack;
+    let vars = &mut state.vars;
+    let iter_stack = &mut state.iter_stack;
     let mut pc = 0usize;
     let mut accu = Value::Null;
     let mut iter_elem = Value::Null;
-    let mut iter_stack: Vec<IterFrame> = Vec::new();
-
-    let mut vars = program.var_cache.lock().unwrap();
 
     loop {
-        // SAFETY: pc is always advanced by valid jump offsets or by +1,
-        // and all jump targets are patched by the compiler to valid indices.
         let instr = unsafe { program.instructions.get_unchecked(pc) };
         pc += 1;
         match instr {
@@ -67,13 +96,13 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
             }
             Instr::JumpIfFalseKeep(offset) => {
                 let v = stack.last().unwrap();
-                if !try_bool(v.clone())? {
+                if !try_bool_ref(v)? {
                     pc = ((pc as isize) + *offset as isize) as usize;
                 }
             }
             Instr::JumpIfTrueKeep(offset) => {
                 let v = stack.last().unwrap();
-                if try_bool(v.clone())? {
+                if try_bool_ref(v)? {
                     pc = ((pc as isize) + *offset as isize) as usize;
                 }
             }
@@ -287,7 +316,6 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
                 } else {
                     iter_elem = frame.items[frame.idx].clone();
                     frame.idx += 1;
-                    stack.push(iter_elem.clone());
                 }
             }
             Instr::IterPop => {
@@ -308,11 +336,20 @@ pub fn eval(program: &Program, ctx: &Context) -> Result<Value, ExecutionError> {
 }
 
 // ---- Runtime helpers --------------------------------------------------------
+// ---- Runtime helpers --------------------------------------------------------
 
 #[inline(always)]
 pub(super) fn try_bool(v: Value) -> Result<bool, ExecutionError> {
     match v {
         Value::Bool(b) => Ok(b),
+        _ => Err(ExecutionError::NoSuchOverload),
+    }
+}
+
+#[inline(always)]
+pub(super) fn try_bool_ref(v: &Value) -> Result<bool, ExecutionError> {
+    match v {
+        Value::Bool(b) => Ok(*b),
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }

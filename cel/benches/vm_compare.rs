@@ -22,7 +22,8 @@ fn benchmark_map(c: &mut Criterion) {
             let mut ctx = Context::default();
             ctx.add_variable_from_value("list", list);
             let vm = program.compile_vm().unwrap();
-            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+            let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
         });
     }
     group.finish();
@@ -47,7 +48,8 @@ fn benchmark_filter(c: &mut Criterion) {
             let mut ctx = Context::default();
             ctx.add_variable_from_value("list", list);
             let vm = program.compile_vm().unwrap();
-            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+            let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
         });
     }
     group.finish();
@@ -72,7 +74,8 @@ fn benchmark_all(c: &mut Criterion) {
             let mut ctx = Context::default();
             ctx.add_variable_from_value("list", list);
             let vm = program.compile_vm().unwrap();
-            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+            let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
         });
     }
     group.finish();
@@ -91,7 +94,8 @@ fn benchmark_micro(c: &mut Criterion) {
         let program = Program::compile("[1, 2, 3][1]").unwrap();
         let ctx = Context::default();
         let vm = program.compile_vm().unwrap();
-        b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+        let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
     });
 
     group.bench_function("ast arith", |b| {
@@ -104,7 +108,8 @@ fn benchmark_micro(c: &mut Criterion) {
         let program = Program::compile("1 + 2 * 3 - 4 / 5").unwrap();
         let ctx = Context::default();
         let vm = program.compile_vm().unwrap();
-        b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+        let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
     });
 
     group.bench_function("ast select", |b| {
@@ -119,7 +124,8 @@ fn benchmark_micro(c: &mut Criterion) {
         let mut ctx = Context::default();
         ctx.add_variable_from_value("foo", HashMap::from([("bar", 42i64)]));
         let vm = program.compile_vm().unwrap();
-        b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx)).unwrap())
+        let mut state = cel::vm::EvalState::new();
+            b.iter(|| cel::vm::eval(black_box(&vm), black_box(&ctx), &mut state).unwrap())
     });
 
     group.finish();

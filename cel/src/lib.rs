@@ -188,7 +188,8 @@ impl Program {
         let program = self.compile_vm().map_err(|e| {
             ExecutionError::InternalError(format!("VM compile error: {}", e))
         })?;
-        vm::eval(&program, context)
+        let mut state = vm::EvalState::new();
+        vm::eval(&program, context, &mut state)
             .map(|v| Ok(v))
             .unwrap_or_else(Err)
     }

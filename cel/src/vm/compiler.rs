@@ -18,7 +18,6 @@ pub fn compile(expr: &Expression) -> Result<Program, String> {
         constants: c.constants,
         var_names: c.var_names.into_iter().collect(),
         instructions: c.instructions,
-        var_cache: std::sync::Mutex::new(vec![None; c.var_map.len()]),
     })
 }
 
@@ -390,7 +389,6 @@ impl Compiler {
         // Loop step
         self.compile_expr(&comp.loop_step.expr)?;
         self.emit(Instr::AccuSet);
-        self.emit(Instr::Pop);
 
         self.emit(Instr::Jump(0));
         let jump_back_idx = self.instructions.len() - 1;
@@ -398,7 +396,6 @@ impl Compiler {
 
         // Exit early
         self.patch_jump(cond_jump, self.instructions.len());
-        self.emit(Instr::Pop);
         self.emit(Instr::Pop);
 
         // Done (iterator exhausted)
