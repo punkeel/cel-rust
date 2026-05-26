@@ -456,10 +456,13 @@ pub(super) fn vm_neg(a: Value) -> Result<Value, ExecutionError> {
 
 #[inline(always)]
 pub(super) fn vm_eq(a: &Value, b: &Value) -> bool {
+    // Fast path: Int/Int is by far the most common case.
+    if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+        return av == bv;
+    }
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Int(a), Value::Int(b)) => a == b,
         (Value::UInt(a), Value::UInt(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
@@ -476,8 +479,10 @@ pub(super) fn vm_eq(a: &Value, b: &Value) -> bool {
 
 #[inline(always)]
 pub(super) fn vm_lt(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
+    if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+        return Ok(av < bv);
+    }
     match (a, b) {
-        (Value::Int(a), Value::Int(b)) => Ok(a < b),
         (Value::UInt(a), Value::UInt(b)) => Ok(a < b),
         (Value::Float(a), Value::Float(b)) => Ok(a < b),
         (Value::String(a), Value::String(b)) => Ok(a < b),
@@ -492,8 +497,10 @@ pub(super) fn vm_lt(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
 
 #[inline(always)]
 pub(super) fn vm_le(a: &Value, b: &Value) -> Result<bool, ExecutionError> {
+    if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+        return Ok(av <= bv);
+    }
     match (a, b) {
-        (Value::Int(a), Value::Int(b)) => Ok(a <= b),
         (Value::UInt(a), Value::UInt(b)) => Ok(a <= b),
         (Value::Float(a), Value::Float(b)) => Ok(a <= b),
         (Value::String(a), Value::String(b)) => Ok(a <= b),
