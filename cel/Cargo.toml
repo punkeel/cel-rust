@@ -19,6 +19,7 @@ serde = "1.0"
 serde_json = { version = "1.0", optional = true }
 base64 = { version = "0.22.1", optional = true }
 bytes = { version = "1", optional = true }
+aho-corasick = "1.1"
 
 thiserror = "1.0"
 pastey = "0.2.1"
@@ -39,6 +40,22 @@ harness = false
 
 [[bench]]
 name = "wirefilter_compare"
+harness = false
+
+[[bench]]
+name = "extended"
+harness = false
+
+[[bench]]
+name = "wirefilter_mirrors"
+harness = false
+
+[[bench]]
+name = "diagnostic"
+harness = false
+
+[[bench]]
+name = "batch_eval"
 harness = false
 
 [features]

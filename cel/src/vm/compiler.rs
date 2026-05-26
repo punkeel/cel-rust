@@ -13,11 +13,32 @@ pub fn compile(expr: &Expression) -> Result<Program, String> {
     let mut c = Compiler::new();
     c.compile_expr(&expr.expr)?;
     c.instructions.push(Instr::Return);
+    peephole_optimize(&mut c.instructions);
     Ok(Program {
         constants: c.constants,
         var_names: c.var_names.into_iter().collect(),
         instructions: c.instructions,
+        regex_pool: c.regex_pool,
     })
+}
+
+/// Fuse `LoadVar*Const + Return` → `Return*Const` to eliminate stack ops.
+fn peephole_optimize(instrs: &mut Vec<Instr>) {
+    if instrs.len() == 2 {
+        let fused = match (&instrs[0], &instrs[1]) {
+            (Instr::LoadVarEqConst(v, c), Instr::Return) => Some(Instr::ReturnEqConst(*v, *c)),
+            (Instr::LoadVarNeConst(v, c), Instr::Return) => Some(Instr::ReturnNeConst(*v, *c)),
+            (Instr::LoadVarLtConst(v, c), Instr::Return) => Some(Instr::ReturnLtConst(*v, *c)),
+            (Instr::LoadVarLeConst(v, c), Instr::Return) => Some(Instr::ReturnLeConst(*v, *c)),
+            (Instr::LoadVarGtConst(v, c), Instr::Return) => Some(Instr::ReturnGtConst(*v, *c)),
+            (Instr::LoadVarGeConst(v, c), Instr::Return) => Some(Instr::ReturnGeConst(*v, *c)),
+            _ => None,
+        };
+        if let Some(new) = fused {
+            instrs[0] = new;
+            instrs.pop(); // remove Return
+        }
+    }
 }
 
 struct Compiler {
@@ -27,6 +48,10 @@ struct Compiler {
     var_map: HashMap<String, u16>,
     instructions: Vec<Instr>,
     comp_scopes: Vec<HashMap<String, CompBinding>>,
+    #[cfg(feature = "regex")]
+    regex_pool: Vec<regex::Regex>,
+    #[cfg(not(feature = "regex"))]
+    regex_pool: Vec<()>,
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +69,7 @@ impl Compiler {
             var_map: HashMap::new(),
             instructions: Vec::new(),
             comp_scopes: Vec::new(),
+            regex_pool: Vec::new(),
         }
     }
 
@@ -418,23 +444,49 @@ impl Compiler {
             return Ok(());
         }
 
-        // Function calls
-        for arg in &call.args {
-            self.compile_expr(&arg.expr)?;
+    // Function calls (and method calls)
+    if let Some(target) = &call.target {
+        self.compile_expr(&target.expr)?;
+    }
+    for arg in &call.args {
+        self.compile_expr(&arg.expr)?;
+    }
+    let builtin_id = match name {
+        "size" => 0,
+        "int" => 1,
+        "double" => 2,
+        "uint" => 3,
+        "string" => 4,
+        "max" => 5,
+        "min" => 11,
+        "@not_strictly_false" => 6,
+        "contains" => 7,
+        "startsWith" => 8,
+        "endsWith" => 9,
+        "matches" => {
+            // Try to pre-compile regex if pattern is a string literal
+            #[cfg(feature = "regex")]
+            if call.args.len() == 1 {
+                if let Expr::Literal(LiteralValue::String(pattern_lit)) = &call.args[0].expr {
+                    let pattern = pattern_lit.inner();
+                    match regex::Regex::new(pattern) {
+                        Ok(re) => {
+                            let idx = self.regex_pool.len() as u16;
+                            self.regex_pool.push(re);
+                            self.emit(Instr::MatchesCompiled(idx));
+                            return Ok(());
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+            10
         }
-        let builtin_id = match name {
-            "size" => 0,
-            "int" => 1,
-            "double" => 2,
-            "uint" => 3,
-            "string" => 4,
-            "max" => 5,
-            "@not_strictly_false" => 6,
-            _ => return Err(format!("unsupported function: {}", name)),
-        };
-        let argc = call.args.len() as u16;
-        self.emit(Instr::Call(builtin_id, argc));
-        Ok(())
+        _ => return Err(format!("unsupported function: {}", name)),
+    };
+    let argc = call.args.len() as u16 + if call.target.is_some() { 1 } else { 0 };
+    self.emit(Instr::Call(builtin_id, argc));
+    Ok(())
     }
 
     fn compile_select(&mut self, sel: &crate::common::ast::SelectExpr) -> Result<(), String> {

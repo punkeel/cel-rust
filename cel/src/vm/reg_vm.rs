@@ -5,6 +5,7 @@ use crate::vm::vm::{
     vm_neg, vm_select, vm_size, vm_sub,
 };
 use crate::ExecutionError;
+use std::sync::Arc;
 
 /// Mutable execution state for the register VM.
 /// Create once, load vars once, then re-use across many `eval_reg` calls.
@@ -107,17 +108,58 @@ pub fn eval_reg(program: &RegProgram, state: &mut RegState) -> Result<Value, Exe
 
             RegInstr::EqStrConst(dst, src, const_idx) => {
                 let expected = match &program.constants[*const_idx as usize] {
-                    Value::String(s) => s.clone(),
+                    Value::String(s) => s.as_str(),
                     _ => {
                         return Err(ExecutionError::InternalError(
                             "EqStrConst with non-string const".into(),
                         ))
                     }
                 };
-                regs[*dst as usize] = fast_eq_str_const(&regs[*src as usize], &expected);
+                let actual = match &regs[*src as usize] {
+                    Value::String(s) => s.as_str(),
+                    other => {
+                        regs[*dst as usize] = Value::Bool(vm_eq(other, &Value::String(Arc::new(expected.to_string()))));
+                        continue;
+                    }
+                };
+                regs[*dst as usize] = Value::Bool(actual == expected);
             }
 
-            // Generic comparisons (fallback)
+            RegInstr::InIntSet(dst, src, const_idx) => {
+                let set = &program.constants[*const_idx as usize];
+                let needle = match &regs[*src as usize] {
+                    Value::Int(i) => *i,
+                    other => {
+                        regs[*dst as usize] = Value::Bool(vm_in(other.clone(), set.clone()).map(|r| matches!(r, Value::Bool(true))).unwrap_or(false));
+                        continue;
+                    }
+                };
+                regs[*dst as usize] = match set {
+                    Value::List(list) => {
+                        let found = list.iter().any(|item| matches!(item, Value::Int(i) if *i == needle));
+                        Value::Bool(found)
+                    }
+                    _ => Value::Bool(vm_in(Value::Int(needle), set.clone()).map(|r| matches!(r, Value::Bool(true))).unwrap_or(false)),
+                };
+            }
+            RegInstr::InStrSet(dst, src, const_idx) => {
+                let set = &program.constants[*const_idx as usize];
+                let needle = match &regs[*src as usize] {
+                    Value::String(s) => s.as_str(),
+                    other => {
+                        regs[*dst as usize] = Value::Bool(vm_in(other.clone(), set.clone()).map(|r| matches!(r, Value::Bool(true))).unwrap_or(false));
+                        continue;
+                    }
+                };
+                regs[*dst as usize] = match set {
+                    Value::List(list) => {
+                        let found = list.iter().any(|item| matches!(item, Value::String(s) if s.as_str() == needle));
+                        Value::Bool(found)
+                    }
+                    _ => Value::Bool(vm_in(Value::String(Arc::new(needle.to_string())), set.clone()).map(|r| matches!(r, Value::Bool(true))).unwrap_or(false)),
+                };
+            }
+
             RegInstr::Eq(dst, a, b) => {
                 regs[*dst as usize] = Value::Bool(vm_eq(&regs[*a as usize], &regs[*b as usize]));
             }

@@ -4,6 +4,7 @@ use crate::objects::Value;
 use crate::vm::reg_bytecode::{RegInstr, RegProgram};
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const MAX_REGS: u8 = 16;
 
@@ -297,16 +298,64 @@ impl RegCompiler {
             return Some(dst);
         }
 
-        // Pattern: var op literal_string
-        if let Some((var_reg, const_idx)) = self.as_var_vs_str_literal(left, right) {
-            if op == operators::EQUALS {
-                let dst = self.alloc_reg();
-                self.emit(RegInstr::EqStrConst(dst, var_reg, const_idx));
-                return Some(dst);
+    // Pattern: var op literal_string
+    if let Some((var_reg, const_idx)) = self.as_var_vs_str_literal(left, right) {
+        if op == operators::EQUALS {
+            let dst = self.alloc_reg();
+            self.emit(RegInstr::EqStrConst(dst, var_reg, const_idx));
+            return Some(dst);
+        }
+    }
+
+    // Pattern: var in [int1, int2, ...]  or  var in [str1, str2, ...]
+    if op == operators::IN {
+        if let Expr::Ident(name) = left {
+            if let Some(&reg) = self.var_reg.get(name) {
+                if let Expr::List(list) = right {
+                    if !list.elements.is_empty() && list.elements.len() <= 16 {
+                        if let Some(set_idx) = self.compile_int_set(list) {
+                            let dst = self.alloc_reg();
+                            self.emit(RegInstr::InIntSet(dst, reg, set_idx));
+                            return Some(dst);
+                        }
+                        if let Some(set_idx) = self.compile_str_set(list) {
+                            let dst = self.alloc_reg();
+                            self.emit(RegInstr::InStrSet(dst, reg, set_idx));
+                            return Some(dst);
+                        }
+                    }
+                }
             }
         }
+    }
 
-        None
+    None
+}
+
+    fn compile_int_set(&mut self, list: &crate::common::ast::ListExpr) -> Option<u16> {
+        let mut ints = Vec::with_capacity(list.elements.len());
+        for el in &list.elements {
+            if let Expr::Literal(LiteralValue::Int(i)) = &el.expr {
+                ints.push(Value::Int(*i.inner()));
+            } else {
+                return None;
+            }
+        }
+        let idx = self.add_const(Value::List(Arc::new(ints)));
+        Some(idx)
+    }
+
+    fn compile_str_set(&mut self, list: &crate::common::ast::ListExpr) -> Option<u16> {
+        let mut strs = Vec::with_capacity(list.elements.len());
+        for el in &list.elements {
+            if let Expr::Literal(LiteralValue::String(s)) = &el.expr {
+                strs.push(Value::String(Arc::new(s.inner().to_string())));
+            } else {
+                return None;
+            }
+        }
+        let idx = self.add_const(Value::List(Arc::new(strs)));
+        Some(idx)
     }
 
     fn as_var_vs_int_literal(&self, left: &Expr, right: &Expr) -> Option<(u8, i64)> {

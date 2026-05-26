@@ -69,6 +69,19 @@ macro_rules! define_bench {
                 });
             }
 
+            // -- CEL Filter Tree --
+            {
+                let program = Program::compile($cel_expr).unwrap();
+                let filter = cel::vm::compile_filter_tree(program.expression()).unwrap();
+                let vars = vec![$(cel::Value::from($cel_val),)*];
+                let result = filter.eval(&vars);
+                assert_eq!(result, $expect, "CEL Filter Tree result mismatch");
+
+                group.bench_function("cel_filter_tree", |b| {
+                    b.iter(|| filter.eval(black_box(&vars)))
+                });
+            }
+
             group.finish();
         }
     };
@@ -124,9 +137,15 @@ define_bench!(
     expect_true: true
 );
 
-// NOTE: wirefilter has a native `contains` operator for substring search.
-// CEL supports this via `method.contains("GET")` but our VM does not yet
-// compile string method calls, so this benchmark is omitted for fairness.
+define_bench!(
+    arith_cmp,
+    wirefilter_expr: "port >= 1024",
+    cel_expr: "port + 100 >= 1024",
+    scheme: [port: Type::Int],
+    cel_vars: [port = 8080i64],
+    wirefilter_values: [port = 8080i64],
+    expect_true: true
+);
 
 define_bench!(
     complex_bool,
@@ -170,6 +189,16 @@ define_bench!(
     expect_true: true
 );
 
+define_bench!(
+    contains_or,
+    wirefilter_expr: "path contains \"/api\" or path contains \"/admin\" or path contains \"/healthz\"",
+    cel_expr: "path.contains(\"/api\") || path.contains(\"/admin\") || path.contains(\"/healthz\")",
+    scheme: [path: Type::Bytes],
+    cel_vars: [path = "/api/v1/users"],
+    wirefilter_values: [path = "/api/v1/users"],
+    expect_true: true
+);
+
 criterion_group!(
     benches,
     int_eq,
@@ -177,10 +206,12 @@ criterion_group!(
     str_eq,
     compound_and,
     in_set,
+    arith_cmp,
     complex_bool,
     large_in_set,
     not_eq,
-    or_eq
+    or_eq,
+    contains_or
 );
 
 criterion_main!(benches);

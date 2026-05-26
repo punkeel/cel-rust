@@ -33,6 +33,10 @@ pub enum RegInstr {
 
     EqStrConst(u8, u8, u16), // dst, src_reg, const_idx (string)
 
+    // Set membership (for small compile-time sets — e.g. port in [80, 443])
+    InIntSet(u8, u8, u16),  // dst, src_reg, const_idx (Value::List of Ints)
+    InStrSet(u8, u8, u16),  // dst, src_reg, const_idx (Value::List of Strings)
+
     // Generic comparisons (fallback)
     Eq(u8, u8, u8),
     Ne(u8, u8, u8),

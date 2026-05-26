@@ -54,9 +54,18 @@ pub enum Instr {
     LoadVarGtConst(u16, u16),
     LoadVarGeConst(u16, u16),
 
+    // Peephole-optimized: return var op const directly (no stack)
+    ReturnEqConst(u16, u16),
+    ReturnNeConst(u16, u16),
+    ReturnLtConst(u16, u16),
+    ReturnLeConst(u16, u16),
+    ReturnGtConst(u16, u16),
+    ReturnGeConst(u16, u16),
+
     // Calls
     Call(u16, u16), // (builtin_id, argc)
     Size,
+    MatchesCompiled(u16), // (regex_pool_idx) — target is on stack
 
     // Comprehensions
     IterInit,
@@ -75,6 +84,10 @@ pub struct Program {
     pub constants: Vec<Value>,
     pub var_names: Vec<String>,
     pub instructions: Vec<Instr>,
+    #[cfg(feature = "regex")]
+    pub regex_pool: Vec<regex::Regex>,
+    #[cfg(not(feature = "regex"))]
+    pub regex_pool: Vec<()>,
 }
 
 impl Program {
@@ -89,6 +102,7 @@ impl Clone for Program {
             constants: self.constants.clone(),
             var_names: self.var_names.clone(),
             instructions: self.instructions.clone(),
+            regex_pool: self.regex_pool.clone(),
         }
     }
 }
@@ -99,6 +113,7 @@ impl std::fmt::Debug for Program {
             .field("instructions", &self.instructions)
             .field("constants", &self.constants)
             .field("var_names", &self.var_names)
+            .field("regex_pool", &self.regex_pool.len())
             .finish()
     }
 }

@@ -26,6 +26,7 @@ impl EvalState {
         }
     }
 
+    #[inline(always)]
     fn reset(&mut self, program: &Program) {
         self.stack.clear();
         self.iter_stack.clear();
@@ -36,6 +37,7 @@ impl EvalState {
         }
     }
 
+    #[inline(always)]
     pub fn bind_vars(&mut self, program: &Program, ctx: &Context) {
         if !self.needs_bind {
             return;
@@ -71,12 +73,75 @@ impl Default for EvalState {
 }
 
 pub fn eval(program: &Program, ctx: &Context, state: &mut EvalState) -> Result<Value, ExecutionError> {
+    // Fast path: scalar compares (single instruction) don't touch stack/iter
+    if program.instructions.len() == 1 {
+        state.bind_vars(program, ctx);
+        return eval_fast(program, state);
+    }
     state.reset(program);
     state.bind_vars(program, ctx);
     eval_fast(program, state)
 }
 
+#[inline]
 pub fn eval_fast(program: &Program, state: &mut EvalState) -> Result<Value, ExecutionError> {
+    let vars = &state.vars;
+
+    // Fast path: single-instruction scalar comparisons (no dispatch loop overhead)
+    if program.instructions.len() == 1 {
+        match &program.instructions[0] {
+            Instr::ReturnEqConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av == bv));
+                }
+                return Ok(Value::Bool(vm_eq(a, b)));
+            }
+            Instr::ReturnNeConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av != bv));
+                }
+                return Ok(Value::Bool(!vm_eq(a, b)));
+            }
+            Instr::ReturnLtConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av < bv));
+                }
+                return Ok(Value::Bool(vm_lt(a, b)?));
+            }
+            Instr::ReturnLeConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av <= bv));
+                }
+                return Ok(Value::Bool(vm_le(a, b)?));
+            }
+            Instr::ReturnGtConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av > bv));
+                }
+                return Ok(Value::Bool(vm_lt(b, a)?));
+            }
+            Instr::ReturnGeConst(v, c) => {
+                let a = &vars[*v as usize];
+                let b = &program.constants[*c as usize];
+                if let (Value::Int(av), Value::Int(bv)) = (a, b) {
+                    return Ok(Value::Bool(av >= bv));
+                }
+                return Ok(Value::Bool(vm_le(b, a)?));
+            }
+            _ => {}
+        }
+    }
+
     let stack = &mut state.stack;
     let vars = &mut state.vars;
     let iter_stack = &mut state.iter_stack;
@@ -223,6 +288,37 @@ pub fn eval_fast(program: &Program, state: &mut EvalState) -> Result<Value, Exec
                 let b = &program.constants[*const_idx as usize];
                 stack.push(Value::Bool(vm_le(b, a)?));
             }
+            // Peephole-optimized: return var op const directly (no stack)
+            Instr::ReturnEqConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(vm_eq(a, b)));
+            }
+            Instr::ReturnNeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(!vm_eq(a, b)));
+            }
+            Instr::ReturnLtConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(vm_lt(a, b)?));
+            }
+            Instr::ReturnLeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(vm_le(a, b)?));
+            }
+            Instr::ReturnGtConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(vm_lt(b, a)?));
+            }
+            Instr::ReturnGeConst(var_idx, const_idx) => {
+                let a = &vars[*var_idx as usize];
+                let b = &program.constants[*const_idx as usize];
+                return Ok(Value::Bool(vm_le(b, a)?));
+            }
             Instr::Not => {
                 let a = stack.pop().unwrap();
                 stack.push(Value::Bool(!try_bool(a)?));
@@ -324,6 +420,24 @@ pub fn eval_fast(program: &Program, state: &mut EvalState) -> Result<Value, Exec
             Instr::Size => {
                 let a = stack.pop().unwrap();
                 stack.push(vm_size(a)?);
+            }
+            Instr::MatchesCompiled(regex_idx) => {
+                #[cfg(feature = "regex")]
+                {
+                    let target = stack.pop().unwrap();
+                    let re = &program.regex_pool[*regex_idx as usize];
+                    match target {
+                        Value::String(s) => stack.push(Value::Bool(re.is_match(&s))),
+                        _ => return Err(ExecutionError::NoSuchOverload),
+                    }
+                }
+                #[cfg(not(feature = "regex"))]
+                {
+                    return Err(ExecutionError::FunctionError {
+                        function: "matches".to_string(),
+                        message: "regex feature not enabled".to_string(),
+                    });
+                }
             }
 
             // Comprehensions
@@ -745,11 +859,89 @@ fn vm_call(builtin_id: u16, args: &[Value]) -> Result<Value, ExecutionError> {
             }
             Ok(max)
         }
+        11 => {
+            // min
+            if args.is_empty() {
+                return Err(ExecutionError::invalid_argument_count(1, 0));
+            }
+            let mut min = args[0].clone();
+            for arg in &args[1..] {
+                if vm_lt(arg, &min)? {
+                    min = arg.clone();
+                }
+            }
+            Ok(min)
+        }
         6 => {
             if args.len() != 1 {
                 return Err(ExecutionError::invalid_argument_count(1, args.len()));
             }
             Ok(Value::Bool(try_bool(args[0].clone()).unwrap_or(true)))
+        }
+        // --- string methods ---
+        7 => {
+            // contains(target, needle)
+            if args.len() != 2 {
+                return Err(ExecutionError::invalid_argument_count(2, args.len()));
+            }
+            match (&args[0], &args[1]) {
+                (Value::String(s), Value::String(needle)) => {
+                    Ok(Value::Bool(s.contains(needle.as_str())))
+                }
+                _ => Err(ExecutionError::NoSuchOverload),
+            }
+        }
+        8 => {
+            // startsWith(target, needle)
+            if args.len() != 2 {
+                return Err(ExecutionError::invalid_argument_count(2, args.len()));
+            }
+            match (&args[0], &args[1]) {
+                (Value::String(s), Value::String(needle)) => {
+                    Ok(Value::Bool(s.starts_with(needle.as_str())))
+                }
+                _ => Err(ExecutionError::NoSuchOverload),
+            }
+        }
+        9 => {
+            // endsWith(target, needle)
+            if args.len() != 2 {
+                return Err(ExecutionError::invalid_argument_count(2, args.len()));
+            }
+            match (&args[0], &args[1]) {
+                (Value::String(s), Value::String(needle)) => {
+                    Ok(Value::Bool(s.ends_with(needle.as_str())))
+                }
+                _ => Err(ExecutionError::NoSuchOverload),
+            }
+        }
+        10 => {
+            // matches(target, regex_pattern)
+            #[cfg(feature = "regex")]
+            {
+                if args.len() != 2 {
+                    return Err(ExecutionError::invalid_argument_count(2, args.len()));
+                }
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(pattern)) => {
+                        match regex::Regex::new(pattern) {
+                            Ok(re) => Ok(Value::Bool(re.is_match(s))),
+                            Err(err) => Err(ExecutionError::FunctionError {
+                                function: "matches".to_string(),
+                                message: format!("'{}' not a valid regex: {}", pattern, err),
+                            }),
+                        }
+                    }
+                    _ => Err(ExecutionError::NoSuchOverload),
+                }
+            }
+            #[cfg(not(feature = "regex"))]
+            {
+                Err(ExecutionError::FunctionError {
+                    function: "matches".to_string(),
+                    message: "regex feature not enabled".to_string(),
+                })
+            }
         }
         _ => Err(ExecutionError::undeclared_reference("unknown builtin")),
     }
