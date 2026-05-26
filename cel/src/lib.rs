@@ -192,18 +192,21 @@ impl Program {
         Value::resolve(&self.expression, context)
     }
 
-    pub fn compile_vm(&self) -> Result<vm::Program, String> {
-        vm::compile(&self.expression)
+    /// Evaluate the expression, trying the compiled filter tree first
+    /// for boolean expressions, then falling back to the AST interpreter.
+    pub fn execute_fast(&self, context: &Context) -> ResolveResult {
+        if let Ok(compiled) = vm::compile_filter_tree(&self.expression) {
+            let vars = compiled.bind_vars(context);
+            Ok(Value::Bool(compiled.filter.eval(&vars)))
+        } else {
+            self.execute(context)
+        }
     }
 
-    pub fn execute_vm(&self, context: &Context) -> ResolveResult {
-        let program = self.compile_vm().map_err(|e| {
-            ExecutionError::InternalError(format!("VM compile error: {}", e))
-        })?;
-        let mut state = vm::EvalState::new();
-        vm::eval(&program, context, &mut state)
-            .map(|v| Ok(v))
-            .unwrap_or_else(Err)
+    /// Compile the expression into a filter tree for fast boolean evaluation.
+    /// Returns None if the expression can't be compiled to a tree (e.g. non-boolean).
+    pub fn compile_tree(&self) -> Option<vm::filter_tree_compiler::CompiledFilterTree> {
+        vm::compile_filter_tree(&self.expression).ok()
     }
 
     /// Returns the variables and functions referenced by the CEL program

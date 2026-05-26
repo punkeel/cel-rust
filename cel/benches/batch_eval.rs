@@ -216,66 +216,6 @@ fn bench_ruleset_batch(c: &mut Criterion) {
         })
     });
 
-    // --- Field-partitioned ruleset (no Box<dyn>, no vtable) ---
-    use cel::vm::ruleset::{ACRule, FieldPartitionedRuleset, IntRule, StrRule};
-    let partitioned = FieldPartitionedRuleset {
-        int_rules: vec![
-            IntRule::Eq { var_idx: 1, val: 80 },
-            IntRule::Eq { var_idx: 1, val: 443 },
-            IntRule::Eq { var_idx: 1, val: 8080 },
-            IntRule::Ge { var_idx: 1, val: 1024 },
-            IntRule::InSet { var_idx: 1, vals: vec![80, 443, 8080, 3000] },
-            IntRule::InSet { var_idx: 1, vals: vec![22, 23, 25, 53] },
-            IntRule::Ge { var_idx: 1, val: 80 },
-            IntRule::Le { var_idx: 1, val: 443 },
-            IntRule::Eq { var_idx: 1, val: 3306 },
-            IntRule::Eq { var_idx: 1, val: 5432 },
-            IntRule::Eq { var_idx: 1, val: 27017 },
-            IntRule::Eq { var_idx: 1, val: 6379 },
-            IntRule::Eq { var_idx: 1, val: 9200 },
-            IntRule::Eq { var_idx: 1, val: 9300 },
-            IntRule::Eq { var_idx: 1, val: 11211 },
-            IntRule::Eq { var_idx: 1, val: 2181 },
-            IntRule::Eq { var_idx: 1, val: 9092 },
-            IntRule::Eq { var_idx: 1, val: 9042 },
-            IntRule::Eq { var_idx: 1, val: 7000 },
-            IntRule::Eq { var_idx: 1, val: 5000 },
-            IntRule::Eq { var_idx: 1, val: 5001 },
-            IntRule::Eq { var_idx: 1, val: 5601 },
-            IntRule::Eq { var_idx: 1, val: 5044 },
-            IntRule::Eq { var_idx: 1, val: 9411 },
-            IntRule::Eq { var_idx: 1, val: 16686 },
-            IntRule::Eq { var_idx: 1, val: 14268 },
-            IntRule::Eq { var_idx: 1, val: 13133 },
-            IntRule::Eq { var_idx: 1, val: 100 },
-            IntRule::Eq { var_idx: 1, val: 101 },
-            IntRule::Eq { var_idx: 1, val: 102 },
-            IntRule::Eq { var_idx: 1, val: 103 },
-            IntRule::Eq { var_idx: 1, val: 104 },
-            IntRule::Eq { var_idx: 1, val: 105 },
-            IntRule::Eq { var_idx: 1, val: 106 },
-            IntRule::Eq { var_idx: 1, val: 107 },
-            IntRule::Eq { var_idx: 1, val: 108 },
-        ],
-        str_rules: vec![
-            StrRule::Eq { var_idx: 2, val: "GET".to_string() },
-            StrRule::Eq { var_idx: 2, val: "POST".to_string() },
-        ],
-        ac_rules: vec![
-            ACRule {
-                var_idx: 0,
-                automaton: aho_corasick::AhoCorasick::new(ac_patterns).unwrap(),
-                min_matches: 1,
-            },
-        ],
-        complex_rules: vec![],
-        var_names: vec!["path".to_string(), "port".to_string(), "method".to_string()],
-    };
-
-    group.bench_function("partitioned_48_rules", |b| {
-        b.iter(|| black_box(partitioned.eval_count(black_box(&vars))))
-    });
-
     group.finish();
 }
 

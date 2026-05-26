@@ -97,16 +97,58 @@ fn main() {
         bench("func_call", || { p.execute(&ctx).unwrap(); })
     };
 
-    // --- VM ---
-    println!("\nVM:");
-    let vm_int_eq = {
+    // --- Fast (compile tree once, then evaluate) ---
+    println!("\nFast (compile once, eval N times):");
+    let fast_int_eq = {
         let p = Program::compile("port == 80").unwrap();
+        let tree = p.compile_tree().unwrap();
         let mut ctx = Context::default();
         ctx.add_variable("port", 80i64);
-        bench("int_eq", || { p.execute_vm(&ctx).unwrap(); })
+        // Compilation is done once above — measure only eval + bind
+        bench("int_eq", || {
+            let vars = tree.bind_vars(&ctx);
+            std::hint::black_box(tree.filter.eval(&vars));
+        })
+    };
+    let fast_str_eq = {
+        let p = Program::compile("country == 'GB'").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let mut ctx = Context::default();
+        ctx.add_variable("country", "GB".to_string());
+        bench("str_eq", || {
+            let vars = tree.bind_vars(&ctx);
+            std::hint::black_box(tree.filter.eval(&vars));
+        })
+    };
+    let fast_in_set = {
+        let p = Program::compile("port in [80, 443, 8080, 8443, 21, 22, 23]").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let mut ctx = Context::default();
+        ctx.add_variable("port", 80i64);
+        bench("in_set", || {
+            let vars = tree.bind_vars(&ctx);
+            std::hint::black_box(tree.filter.eval(&vars));
+        })
+    };
+    let fast_arith_cmp = {
+        let p = Program::compile("port + 100 >= 1024").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let mut ctx = Context::default();
+        ctx.add_variable("port", 924i64);
+        bench("arith_cmp", || {
+            let vars = tree.bind_vars(&ctx);
+            std::hint::black_box(tree.filter.eval(&vars));
+        })
+    };
+    // func_call: "hello".size() == 5 can't compile to tree (member call proxy) → falls back
+    let fast_func_call = {
+        let env = cel::Env::stdlib();
+        let p = Program::compile_with_env("'hello'.size() == 5", &env).unwrap();
+        let ctx = Context::default();
+        bench("func_call (AST fallback)", || { p.execute_fast(&ctx).unwrap(); })
     };
 
-    // --- Filter Tree ---
+    // --- Filter Tree (manual) ---
     println!("\nFilter Tree:");
     let tree_int_eq = {
         let vars = vec![Value::Int(80)];
@@ -153,12 +195,12 @@ fn main() {
         + ast_arith_cmp * W_ARITH_CMP
         + ast_func_call * W_FUNC_CALL;
 
-    let vm_score = vm_int_eq * W_INT_EQ
-        + vm_int_eq * W_INT_RANGE
-        + vm_int_eq * W_STR_EQ
-        + vm_int_eq * W_IN_SET
-        + vm_int_eq * W_ARITH_CMP
-        + vm_int_eq * W_FUNC_CALL;
+    let fast_score = fast_int_eq * W_INT_EQ
+        + fast_int_eq * W_INT_RANGE
+        + fast_str_eq * W_STR_EQ
+        + fast_in_set * W_IN_SET
+        + fast_arith_cmp * W_ARITH_CMP
+        + fast_func_call * W_FUNC_CALL;
 
     let tree_score = tree_int_eq * W_INT_EQ
         + tree_int_eq * W_INT_RANGE
@@ -169,9 +211,10 @@ fn main() {
 
     println!("\n=== SCORECARD ===");
     println!("AST score:   {:>8.1} ns", ast_score);
-    println!("VM score:    {:>8.1} ns", vm_score);
+    println!("Fast score:  {:>8.1} ns", fast_score);
     println!("Tree score:  {:>8.1} ns", tree_score);
+    println!("Fast vs AST: {:>8.1}x faster", ast_score / fast_score);
+    println!("Fast vs Tree:{:>8.1}x slower (overhead)", fast_score / tree_score);
     println!("Tree vs AST: {:>8.1}x faster", ast_score / tree_score);
-    println!("Tree vs VM:  {:>8.1}x faster", vm_score / tree_score);
     println!("=================");
 }

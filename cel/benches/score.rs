@@ -73,7 +73,7 @@ fn bench_score(c: &mut Criterion) {
                 let p = Program::compile("port == 80").unwrap();
                 let mut ctx = Context::default();
                 ctx.add_variable("port", 80i64);
-                micro_bench(|| { p.execute_vm(&ctx).unwrap(); }, iters)
+                micro_bench(|| { p.execute_fast(&ctx).unwrap(); }, iters)
             };
 
             // --- Filter Tree benchmarks ---

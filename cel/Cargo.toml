@@ -31,35 +31,7 @@ dhat = { version = "0.3.3" }
 wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter.git" }
 
 [[bench]]
-name = "runtime"
-harness = false
-
-[[bench]]
-name = "vm_compare"
-harness = false
-
-[[bench]]
-name = "wirefilter_compare"
-harness = false
-
-[[bench]]
-name = "extended"
-harness = false
-
-[[bench]]
-name = "wirefilter_mirrors"
-harness = false
-
-[[bench]]
-name = "diagnostic"
-harness = false
-
-[[bench]]
 name = "batch_eval"
-harness = false
-
-[[bench]]
-name = "function_dispatch"
 harness = false
 
 [[bench]]
