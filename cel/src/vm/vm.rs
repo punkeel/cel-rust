@@ -404,7 +404,7 @@ pub(super) fn vm_add(a: Value, b: Value) -> Result<Value, ExecutionError> {
 }
 
 #[inline(always)]
-pub(super) fn vm_sub(a: Value, b: Value) -> Result<Value, ExecutionError> {
+pub fn vm_sub(a: Value, b: Value) -> Result<Value, ExecutionError> {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_sub(b))),
         (Value::UInt(a), Value::UInt(b)) => Ok(Value::UInt(a.wrapping_sub(b))),

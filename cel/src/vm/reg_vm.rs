@@ -5,37 +5,27 @@ use crate::vm::vm::{
     vm_neg, vm_select, vm_size, vm_sub,
 };
 use crate::ExecutionError;
-use std::sync::Arc;
 
+/// Mutable execution state for the register VM.
+/// Create once, load vars once, then re-use across many `eval_reg` calls.
 pub struct RegState {
-    pub regs: [Value; 8],
-    pub vars: Vec<Value>,
+    regs: [Value; 16],
 }
 
 impl RegState {
     pub fn new() -> Self {
         Self {
             regs: std::array::from_fn(|_| Value::Null),
-            vars: Vec::with_capacity(16),
         }
     }
 
-    pub fn bind_vars(&mut self, program: &RegProgram, ctx: &crate::context::Context) {
-        let need = program.var_names.len();
-        if self.vars.len() != need {
-            self.vars.resize_with(need, || Value::Null);
+    /// Load variables into registers 0..N.
+    pub fn set_vars(&mut self, vars: &[Value]) {
+        for (i, v) in vars.iter().enumerate() {
+            if i < 16 {
+                self.regs[i] = v.clone();
+            }
         }
-        for (i, name) in program.var_names.iter().enumerate() {
-            let v = ctx
-                .get_variable(name)
-                .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                .unwrap_or(Value::Null);
-            self.vars[i] = v;
-        }
-    }
-
-    pub fn set_vars(&mut self, vars: Vec<Value>) {
-        self.vars = vars;
     }
 }
 
@@ -45,44 +35,89 @@ impl Default for RegState {
     }
 }
 
+/// Evaluate a register program using a pre-loaded `RegState`.
 pub fn eval_reg(program: &RegProgram, state: &mut RegState) -> Result<Value, ExecutionError> {
     let regs = &mut state.regs;
-    let vars = &state.vars;
     let mut pc = 0usize;
+    let code = &program.instructions;
 
     loop {
-        let instr = unsafe { program.instructions.get_unchecked(pc) };
+        // Bounds check eliminated by trusting the compiler produced valid jumps.
+        let instr = unsafe { code.get_unchecked(pc) };
         pc += 1;
+
         match instr {
             RegInstr::Halt(r) => return Ok(regs[*r as usize].clone()),
-            RegInstr::LoadVar(dst, idx) => regs[*dst as usize] = vars[*idx as usize].clone(),
-            RegInstr::LoadConst(dst, idx) => regs[*dst as usize] = program.constants[*idx as usize].clone(),
             RegInstr::Move(dst, src) => regs[*dst as usize] = regs[*src as usize].clone(),
 
-            RegInstr::Add(dst, a, b) => {
-                let r = vm_add(regs[*a as usize].clone(), regs[*b as usize].clone())?;
-                regs[*dst as usize] = r;
+            RegInstr::LoadConst(dst, idx) => {
+                regs[*dst as usize] = program.constants[*idx as usize].clone();
             }
-            RegInstr::Sub(dst, a, b) => {
-                let r = vm_sub(regs[*a as usize].clone(), regs[*b as usize].clone())?;
-                regs[*dst as usize] = r;
+            RegInstr::LoadConstInt(dst, v) => {
+                regs[*dst as usize] = Value::Int(*v);
             }
-            RegInstr::Mul(dst, a, b) => {
-                let r = vm_mul(regs[*a as usize].clone(), regs[*b as usize].clone())?;
-                regs[*dst as usize] = r;
-            }
-            RegInstr::Div(dst, a, b) => {
-                let r = vm_div(regs[*a as usize].clone(), regs[*b as usize].clone())?;
-                regs[*dst as usize] = r;
-            }
-            RegInstr::Mod(dst, a, b) => {
-                let r = vm_mod(regs[*a as usize].clone(), regs[*b as usize].clone())?;
-                regs[*dst as usize] = r;
-            }
-            RegInstr::Neg(dst, src) => {
-                regs[*dst as usize] = vm_neg(regs[*src as usize].clone())?;
+            RegInstr::LoadConstBool(dst, v) => {
+                regs[*dst as usize] = Value::Bool(*v);
             }
 
+            // Integer arithmetic (fast path — assumes Int, falls back to generic)
+            RegInstr::AddInt(dst, a, b) => {
+                regs[*dst as usize] =
+                    fast_add_int(&regs[*a as usize], &regs[*b as usize])?;
+            }
+            RegInstr::SubInt(dst, a, b) => {
+                regs[*dst as usize] =
+                    fast_sub_int(&regs[*a as usize], &regs[*b as usize])?;
+            }
+            RegInstr::MulInt(dst, a, b) => {
+                regs[*dst as usize] =
+                    fast_mul_int(&regs[*a as usize], &regs[*b as usize])?;
+            }
+            RegInstr::DivInt(dst, a, b) => {
+                regs[*dst as usize] =
+                    fast_div_int(&regs[*a as usize], &regs[*b as usize])?;
+            }
+            RegInstr::ModInt(dst, a, b) => {
+                regs[*dst as usize] =
+                    fast_mod_int(&regs[*a as usize], &regs[*b as usize])?;
+            }
+            RegInstr::NegInt(dst, src) => {
+                regs[*dst as usize] = fast_neg_int(&regs[*src as usize])?;
+            }
+
+            // Type-specialized comparisons ─── the money makers
+            RegInstr::EqIntConst(dst, src, val) => {
+                regs[*dst as usize] = fast_eq_int_const(&regs[*src as usize], *val);
+            }
+            RegInstr::NeIntConst(dst, src, val) => {
+                regs[*dst as usize] = Value::Bool(!fast_eq_int_const_bool(&regs[*src as usize], *val));
+            }
+            RegInstr::LtIntConst(dst, src, val) => {
+                regs[*dst as usize] = fast_lt_int_const(&regs[*src as usize], *val);
+            }
+            RegInstr::LeIntConst(dst, src, val) => {
+                regs[*dst as usize] = fast_le_int_const(&regs[*src as usize], *val);
+            }
+            RegInstr::GtIntConst(dst, src, val) => {
+                regs[*dst as usize] = fast_gt_int_const(&regs[*src as usize], *val);
+            }
+            RegInstr::GeIntConst(dst, src, val) => {
+                regs[*dst as usize] = fast_ge_int_const(&regs[*src as usize], *val);
+            }
+
+            RegInstr::EqStrConst(dst, src, const_idx) => {
+                let expected = match &program.constants[*const_idx as usize] {
+                    Value::String(s) => s.clone(),
+                    _ => {
+                        return Err(ExecutionError::InternalError(
+                            "EqStrConst with non-string const".into(),
+                        ))
+                    }
+                };
+                regs[*dst as usize] = fast_eq_str_const(&regs[*src as usize], &expected);
+            }
+
+            // Generic comparisons (fallback)
             RegInstr::Eq(dst, a, b) => {
                 regs[*dst as usize] = Value::Bool(vm_eq(&regs[*a as usize], &regs[*b as usize]));
             }
@@ -105,10 +140,10 @@ pub fn eval_reg(program: &RegProgram, state: &mut RegState) -> Result<Value, Exe
             RegInstr::Not(dst, src) => {
                 regs[*dst as usize] = Value::Bool(!try_bool(regs[*src as usize].clone())?);
             }
-            RegInstr::LogicalAnd(dst, a, b) => {
+            RegInstr::And(dst, a, b) => {
                 regs[*dst as usize] = vm_logical_and(regs[*a as usize].clone(), regs[*b as usize].clone());
             }
-            RegInstr::LogicalOr(dst, a, b) => {
+            RegInstr::Or(dst, a, b) => {
                 regs[*dst as usize] = vm_logical_or(regs[*a as usize].clone(), regs[*b as usize].clone());
             }
 
@@ -129,35 +164,35 @@ pub fn eval_reg(program: &RegProgram, state: &mut RegState) -> Result<Value, Exe
             RegInstr::Select(dst, obj, field_idx) => {
                 let field = match &program.constants[*field_idx as usize] {
                     Value::String(s) => s,
-                    _ => return Err(ExecutionError::InternalError("select non-string".into())),
+                    _ => {
+                        return Err(ExecutionError::InternalError(
+                            "select non-string".into(),
+                        ))
+                    }
                 };
                 regs[*dst as usize] = vm_select(&regs[*obj as usize], field)?;
             }
             RegInstr::HasField(dst, obj, field_idx) => {
                 let field = match &program.constants[*field_idx as usize] {
                     Value::String(s) => s,
-                    _ => return Err(ExecutionError::InternalError("has_field non-string".into())),
+                    _ => {
+                        return Err(ExecutionError::InternalError(
+                            "has_field non-string".into(),
+                        ))
+                    }
                 };
                 regs[*dst as usize] = Value::Bool(vm_has_field(&regs[*obj as usize], field));
             }
 
             RegInstr::Index(dst, obj, idx) => {
-                regs[*dst as usize] = vm_index(regs[*obj as usize].clone(), regs[*idx as usize].clone())?;
+                regs[*dst as usize] =
+                    vm_index(regs[*obj as usize].clone(), regs[*idx as usize].clone())?;
             }
             RegInstr::In(dst, val, container) => {
-                regs[*dst as usize] = vm_in(regs[*val as usize].clone(), regs[*container as usize].clone())?;
+                regs[*dst as usize] =
+                    vm_in(regs[*val as usize].clone(), regs[*container as usize].clone())?;
             }
 
-            RegInstr::Call(dst, builtin_id, argc) => {
-                // Register VM call: arguments are in consecutive registers starting at dst+1
-                // Actually this encoding is problematic. For now, use a simple approach:
-                // single-arg builtins only.
-                let argc = *argc as usize;
-                let args_start = *dst as usize + 1;
-                let args = &regs[args_start..args_start + argc];
-                let result = vm_call_reg(*builtin_id, args)?;
-                regs[*dst as usize] = result;
-            }
             RegInstr::Size(dst, src) => {
                 regs[*dst as usize] = vm_size(regs[*src as usize].clone())?;
             }
@@ -165,84 +200,119 @@ pub fn eval_reg(program: &RegProgram, state: &mut RegState) -> Result<Value, Exe
     }
 }
 
-fn vm_call_reg(builtin_id: u16, args: &[Value]) -> Result<Value, ExecutionError> {
-    match builtin_id {
-        0 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
+/* ---------- Fast helpers ---------- */
+
+#[inline(always)]
+fn fast_eq_int_const(v: &Value, expected: i64) -> Value {
+    match v {
+        Value::Int(i) => Value::Bool(*i == expected),
+        other => Value::Bool(vm_eq(other, &Value::Int(expected))),
+    }
+}
+
+#[inline(always)]
+fn fast_eq_int_const_bool(v: &Value, expected: i64) -> bool {
+    match v {
+        Value::Int(i) => *i == expected,
+        other => vm_eq(other, &Value::Int(expected)),
+    }
+}
+
+#[inline(always)]
+fn fast_lt_int_const(v: &Value, expected: i64) -> Value {
+    match v {
+        Value::Int(i) => Value::Bool(*i < expected),
+        other => Value::Bool(vm_lt(other, &Value::Int(expected)).unwrap_or(false)),
+    }
+}
+
+#[inline(always)]
+fn fast_le_int_const(v: &Value, expected: i64) -> Value {
+    match v {
+        Value::Int(i) => Value::Bool(*i <= expected),
+        other => Value::Bool(vm_le(other, &Value::Int(expected)).unwrap_or(false)),
+    }
+}
+
+#[inline(always)]
+fn fast_gt_int_const(v: &Value, expected: i64) -> Value {
+    match v {
+        Value::Int(i) => Value::Bool(*i > expected),
+        other => Value::Bool(vm_lt(&Value::Int(expected), other).unwrap_or(false)),
+    }
+}
+
+#[inline(always)]
+fn fast_ge_int_const(v: &Value, expected: i64) -> Value {
+    match v {
+        Value::Int(i) => Value::Bool(*i >= expected),
+        other => Value::Bool(vm_le(&Value::Int(expected), other).unwrap_or(false)),
+    }
+}
+
+#[inline(always)]
+fn fast_eq_str_const(v: &Value, expected: &std::sync::Arc<String>) -> Value {
+    match v {
+        Value::String(s) => Value::Bool(s.as_str() == expected.as_str()),
+        other => Value::Bool(vm_eq(other, &Value::String(expected.clone()))),
+    }
+}
+
+#[inline(always)]
+fn fast_add_int(a: &Value, b: &Value) -> Result<Value, ExecutionError> {
+    match (a, b) {
+        (Value::Int(av), Value::Int(bv)) => Ok(Value::Int(av.wrapping_add(*bv))),
+        _ => vm_add(a.clone(), b.clone()),
+    }
+}
+
+#[inline(always)]
+fn fast_sub_int(a: &Value, b: &Value) -> Result<Value, ExecutionError> {
+    match (a, b) {
+        (Value::Int(av), Value::Int(bv)) => Ok(Value::Int(av.wrapping_sub(*bv))),
+        _ => vm_sub(a.clone(), b.clone()),
+    }
+}
+
+#[inline(always)]
+fn fast_mul_int(a: &Value, b: &Value) -> Result<Value, ExecutionError> {
+    match (a, b) {
+        (Value::Int(av), Value::Int(bv)) => Ok(Value::Int(av.wrapping_mul(*bv))),
+        _ => vm_mul(a.clone(), b.clone()),
+    }
+}
+
+#[inline(always)]
+fn fast_div_int(a: &Value, b: &Value) -> Result<Value, ExecutionError> {
+    match (a, b) {
+        (Value::Int(av), Value::Int(bv)) => {
+            if *bv == 0 {
+                return Err(ExecutionError::DivisionByZero(Value::Int(*av)));
             }
-            vm_size(args[0].clone())
+            Ok(Value::Int(av / bv))
         }
-        1 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
+        _ => vm_div(a.clone(), b.clone()),
+    }
+}
+
+#[inline(always)]
+fn fast_mod_int(a: &Value, b: &Value) -> Result<Value, ExecutionError> {
+    match (a, b) {
+        (Value::Int(av), Value::Int(bv)) => {
+            if *bv == 0 {
+                return Err(ExecutionError::RemainderByZero(Value::Int(*av)));
             }
-            match &args[0] {
-                Value::Int(i) => Ok(Value::Int(*i)),
-                Value::UInt(u) => Ok(Value::Int(*u as i64)),
-                Value::Float(f) => Ok(Value::Int(*f as i64)),
-                Value::String(s) => s
-                    .parse::<i64>()
-                    .map(Value::Int)
-                    .map_err(|e| ExecutionError::function_error("int", e.to_string())),
-                _ => Err(ExecutionError::NoSuchOverload),
-            }
+            Ok(Value::Int(av % bv))
         }
-        2 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
-            }
-            match &args[0] {
-                Value::Int(i) => Ok(Value::Float(*i as f64)),
-                Value::UInt(u) => Ok(Value::Float(*u as f64)),
-                Value::Float(f) => Ok(Value::Float(*f)),
-                Value::String(s) => s
-                    .parse::<f64>()
-                    .map(Value::Float)
-                    .map_err(|e| ExecutionError::function_error("double", e.to_string())),
-                _ => Err(ExecutionError::NoSuchOverload),
-            }
-        }
-        3 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
-            }
-            match &args[0] {
-                Value::Int(i) => Ok(Value::UInt(*i as u64)),
-                Value::UInt(u) => Ok(Value::UInt(*u)),
-                Value::Float(f) => Ok(Value::UInt(*f as u64)),
-                Value::String(s) => s
-                    .parse::<u64>()
-                    .map(Value::UInt)
-                    .map_err(|e| ExecutionError::function_error("uint", e.to_string())),
-                _ => Err(ExecutionError::NoSuchOverload),
-            }
-        }
-        4 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
-            }
-            Ok(Value::String(Arc::new(format!("{:?}", args[0]))))
-        }
-        5 => {
-            if args.is_empty() {
-                return Err(ExecutionError::invalid_argument_count(1, 0));
-            }
-            let mut max = args[0].clone();
-            for arg in &args[1..] {
-                if vm_lt(&max, arg)? {
-                    max = arg.clone();
-                }
-            }
-            Ok(max)
-        }
-        6 => {
-            if args.len() != 1 {
-                return Err(ExecutionError::invalid_argument_count(1, args.len()));
-            }
-            Ok(Value::Bool(try_bool(args[0].clone()).unwrap_or(true)))
-        }
-        _ => Err(ExecutionError::undeclared_reference("unknown builtin")),
+        _ => vm_mod(a.clone(), b.clone()),
+    }
+}
+
+#[inline(always)]
+fn fast_neg_int(v: &Value) -> Result<Value, ExecutionError> {
+    match v {
+        Value::Int(i) => Ok(Value::Int(-*i)),
+        _ => vm_neg(v.clone()),
     }
 }
 
@@ -263,3 +333,5 @@ fn vm_logical_or(lhs: Value, rhs: Value) -> Value {
         (a, _) => a,
     }
 }
+
+
