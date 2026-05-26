@@ -188,32 +188,49 @@ fn main() {
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
     };
 
-    // --- Filter + EvalContext (Schema API) ---
-    println!("\nFilter+EvalContext:");
+    // --- cel::fast API (Schema + EvalContext) ---
+    println!("\ncel::fast API:");
     let schema_int_eq = {
-        let p = Program::compile("port == 80").unwrap();
-        let tree = p.compile_tree().unwrap();
-        let vars = vec![Value::Int(80)];
-        bench("int_eq", || { std::hint::black_box(tree.filter.eval(&vars)); })
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port == 80", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        bench("int_eq", || {
+            ctx.set_i64(port, 80);
+            std::hint::black_box(filter.eval(&ctx).unwrap());
+        })
     };
     let schema_str_eq = {
-        let p = Program::compile("country == 'GB'").unwrap();
-        let tree = p.compile_tree().unwrap();
-        let vars = vec![Value::String(Arc::new("GB".to_string()))];
-        bench("str_eq", || { std::hint::black_box(tree.filter.eval(&vars)); })
+        let mut s = Schema::new();
+        let country = s.add_field("country", FieldType::String);
+        let filter = Filter::compile("country == 'GB'", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        bench("str_eq", || {
+            ctx.set_str(country, "GB");
+            std::hint::black_box(filter.eval(&ctx).unwrap());
+        })
     };
     let schema_in_set = {
-        let p = Program::compile("port in [80, 443, 8080, 8443, 21, 22, 23]").unwrap();
-        let tree = p.compile_tree().unwrap();
-        let vars = vec![Value::Int(80)];
-        bench("in_set", || { std::hint::black_box(tree.filter.eval(&vars)); })
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port in [80, 443, 8080, 8443, 21, 22, 23]", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        bench("in_set", || {
+            ctx.set_i64(port, 80);
+            std::hint::black_box(filter.eval(&ctx).unwrap());
+        })
     };
     let schema_arith_cmp = {
-        let p = Program::compile("port + 100 >= 1024").unwrap();
-        let tree = p.compile_tree().unwrap();
-        let vars = vec![Value::Int(924)];
-        bench("arith_cmp", || { std::hint::black_box(tree.filter.eval(&vars)); })
+        let mut s = Schema::new();
+        let port = s.add_field("port", FieldType::Int);
+        let filter = Filter::compile("port + 100 >= 1024", &s).unwrap();
+        let mut ctx = EvalContext::new(&s);
+        bench("arith_cmp", || {
+            ctx.set_i64(port, 924);
+            std::hint::black_box(filter.eval(&ctx).unwrap());
+        })
     };
+    // func_call falls through to AST — no schema needed for setup
     let schema_func_call = {
         let vars = vec![Value::String(Arc::new("hello".to_string()))];
         let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
@@ -250,12 +267,11 @@ fn main() {
         + schema_func_call * W_FUNC_CALL;
 
     println!("\n=== SCORECARD ===");
-    println!("AST score:         {:>8.1} ns", ast_score);
-    println!("Fast (bind_vars):  {:>8.1} ns", fast_score);
-    println!("Filter+EvalContext:{:>8.1} ns", schema_score);
-    println!("Tree (manual):     {:>8.1} ns", tree_score);
-    println!("Fast  vs AST:      {:>8.1}x", ast_score / fast_score);
-    println!("Schema vs AST:     {:>8.1}x", ast_score / schema_score);
-    println!("Schema vs Fast:    {:>8.1}x", fast_score / schema_score);
+    println!("AST:              {:>8.1} ns", ast_score);
+    println!("Fast (bind_vars): {:>8.1} ns", fast_score);
+    println!("cel::fast (set+eval):{:>6.1} ns", schema_score);
+    println!("Tree (manual):    {:>8.1} ns", tree_score);
+    println!("cel::fast vs AST: {:>8.1}x faster", ast_score / schema_score);
+    println!("cel::fast vs Fast:{:>7.1}x faster", fast_score / schema_score);
     println!("=================");
 }
