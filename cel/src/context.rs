@@ -4,7 +4,6 @@ use crate::objects::{TryIntoValue, Value};
 use crate::parser::Expression;
 use crate::{Env, ExecutionError};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Context is a collection of variables and functions that can be used
@@ -35,13 +34,13 @@ use std::sync::Arc;
 pub enum Context<'a> {
     Root {
         functions: FunctionRegistry,
-        variables: BTreeMap<String, Box<dyn Val>>,
+        variables: Vec<(String, Box<dyn Val>)>,
         resolver: Option<&'a dyn VariableResolver>,
         env: Arc<Env>,
     },
     Child {
         parent: &'a Context<'a>,
-        variables: BTreeMap<String, Box<dyn Val>>,
+        variables: Vec<(String, Box<dyn Val>)>,
         resolver: Option<&'a dyn VariableResolver>,
     },
 }
@@ -56,16 +55,23 @@ impl<'a> Context<'a> {
         S: Into<String>,
         V: TryIntoValue,
     {
+        let name = name.into();
+        let value = value.try_into_value()?;
+        let value: Box<dyn Val> = value.try_into().unwrap();
         match self {
             Context::Root { variables, .. } => {
-                let value = value.try_into_value()?;
-                let value: Box<dyn Val> = value.try_into().unwrap();
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
             Context::Child { variables, .. } => {
-                let value = value.try_into_value()?;
-                let value: Box<dyn Val> = value.try_into().unwrap();
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
         }
         Ok(())
@@ -76,16 +82,23 @@ impl<'a> Context<'a> {
         S: Into<String>,
         V: Into<Value>,
     {
+        let name = name.into();
+        let value = value.into();
+        let value: Box<dyn Val> = value.try_into().unwrap();
         match self {
             Context::Root { variables, .. } => {
-                let value = value.into();
-                let value: Box<dyn Val> = value.try_into().unwrap();
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
             Context::Child { variables, .. } => {
-                let value = value.into();
-                let value: Box<dyn Val> = value.try_into().unwrap();
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
         }
     }
@@ -94,12 +107,21 @@ impl<'a> Context<'a> {
     where
         S: Into<String>,
     {
+        let name = name.into();
         match self {
             Context::Root { variables, .. } => {
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
             Context::Child { variables, .. } => {
-                variables.insert(name.into(), value);
+                if let Some(entry) = variables.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = value;
+                } else {
+                    variables.push((name, value));
+                }
             }
         }
     }
@@ -131,9 +153,8 @@ impl<'a> Context<'a> {
                         .map(|v| Cow::<dyn Val>::Owned(v.try_into().unwrap()))
                 })
                 .or_else(|| {
-                    variables
-                        .get(name)
-                        .map(|b| Cow::<dyn Val>::Borrowed(b.as_ref()))
+                    variables.iter().rev().find(|(k, _)| k == name)
+                        .map(|(_, v)| Cow::Borrowed(v.as_ref()))
                         .or_else(|| parent.get_variable(name))
                 }),
             Context::Root {
@@ -146,9 +167,8 @@ impl<'a> Context<'a> {
                         .map(|v| Cow::<dyn Val>::Owned(v.try_into().unwrap()))
                 })
                 .or_else(|| {
-                    variables
-                        .get(name)
-                        .map(|v| Cow::<dyn Val>::Borrowed(v.as_ref()))
+                    variables.iter().rev().find(|(k, _)| k == name)
+                        .map(|(_, v)| Cow::Borrowed(v.as_ref()))
                 }),
         }
     }
