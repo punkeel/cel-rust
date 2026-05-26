@@ -31,19 +31,19 @@ macro_rules! impl_conversions {
 
             impl From<$target_type> for Value {
                 fn from(value: $target_type) -> Self {
-                    $value_variant(value)
+                    $value_variant(value.into())
                 }
             }
 
             impl $crate::magic::IntoResolveResult for $target_type {
                 fn into_resolve_result(self) -> ResolveResult {
-                    Ok($value_variant(self))
+                    Ok($value_variant(self.into()))
                 }
             }
 
             impl $crate::magic::IntoResolveResult for Result<$target_type, ExecutionError> {
                 fn into_resolve_result(self) -> ResolveResult {
-                    self.map($value_variant)
+                    self.map(|v| $value_variant(v.into()))
                 }
             }
 

@@ -84,7 +84,7 @@ fn bench_score(c: &mut Criterion) {
             };
 
             let tree_str_eq = {
-                let vars = vec![Value::String(Arc::new("GB".to_string()))];
+                let vars = vec![Value::String(Arc::from("GB"))];
                 let f: Box<dyn BoolFilter> = Box::new(EqStrConst {
                     var_idx: 0,
                     val: "GB".to_string(),

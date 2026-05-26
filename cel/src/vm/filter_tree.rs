@@ -62,8 +62,8 @@ impl StrExpr {
         match self {
             Self::Literal(s) => Some(s.as_str()),
             Self::Var(idx) => match &vars[*idx] {
-                Value::String(s) => Some(s.as_str()),
-                _ => Some(""),
+                Value::String(s) => Some(&**s),
+            _ => Some(""),
             },
             Self::Concat(_, _) => None,
         }
@@ -75,7 +75,7 @@ impl StrExpr {
         match self {
             Self::Literal(s) => s.clone(),
             Self::Var(idx) => match &vars[*idx] {
-                Value::String(s) => s.as_str().to_string(),
+                Value::String(s) => (&**s).to_string(),
                 _ => String::new(),
             },
             Self::Concat(a, b) => {
@@ -275,7 +275,7 @@ impl BoolFilter for EqStrConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
         match &vars[self.var_idx] {
-            Value::String(s) => s.as_str() == self.val,
+            Value::String(s) => &**s == self.val,
             _ => false,
         }
     }
@@ -306,7 +306,7 @@ impl<const N: usize> BoolFilter for InStrSet<N> {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
         match &vars[self.var_idx] {
-            Value::String(s) => self.vals.iter().any(|v| s.as_str() == v),
+            Value::String(s) => self.vals.iter().any(|v| s.as_ref() == v),
             _ => false,
         }
     }
@@ -337,7 +337,7 @@ impl BoolFilter for InStrLinearSet {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
         match &vars[self.var_idx] {
-            Value::String(s) => self.vals.iter().any(|v| s.as_str() == v),
+            Value::String(s) => self.vals.iter().any(|v| s.as_ref() == v),
             _ => false,
         }
     }
@@ -430,7 +430,7 @@ impl BoolFilter for ContainsAny {
     fn eval(&self, vars: &[Value]) -> bool {
         match &vars[self.var_idx] {
             Value::String(s) => {
-                let text = s.as_str();
+                let text: &str = &**s;
                 // Unroll-like: the compiler usually unrolls this for small Vecs
                 for needle in &self.needles {
                     if text.contains(needle.as_str()) {

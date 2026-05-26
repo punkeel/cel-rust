@@ -157,7 +157,7 @@ fn main() {
         bench("int_eq", || { std::hint::black_box(f.eval(&vars)); })
     };
     let tree_str_eq = {
-        let vars = vec![Value::String(Arc::new("GB".to_string()))];
+        let vars = vec![Value::String(Arc::from("GB"))];
         let f: Box<dyn BoolFilter> = Box::new(EqStrConst {
             var_idx: 0,
             val: "GB".to_string(),
@@ -182,7 +182,7 @@ fn main() {
         bench("arith_cmp", || { std::hint::black_box(f.eval(&vars)); })
     };
     let tree_func_call = {
-        let vars = vec![Value::String(Arc::new("hello".to_string()))];
+        let vars = vec![Value::String(Arc::from("hello"))];
         // No direct func_call in FilterTree; use int_eq as proxy
         let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
@@ -232,7 +232,7 @@ fn main() {
     };
     // func_call falls through to AST — no schema needed for setup
     let schema_func_call = {
-        let vars = vec![Value::String(Arc::new("hello".to_string()))];
+        let vars = vec![Value::String(Arc::from("hello"))];
         let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
     };

@@ -121,7 +121,7 @@ pub fn contains(This(this): This<Value>, arg: Value) -> Result<Value> {
         }
         Value::String(s) => {
             if let Value::String(arg) = arg {
-                s.contains(arg.as_str())
+                s.contains(arg.as_ref())
             } else {
                 false
             }
@@ -150,7 +150,7 @@ pub fn string(ftx: &FunctionContext, This(this): This<Value>) -> Result<Value> {
         Value::Int(v) => Value::String(v.to_string().into()),
         Value::UInt(v) => Value::String(v.to_string().into()),
         Value::Float(v) => Value::String(v.to_string().into()),
-        Value::Bytes(v) => Value::String(Arc::new(String::from_utf8_lossy(v.as_slice()).into())),
+        Value::Bytes(v) => Value::String(String::from_utf8_lossy(v.as_slice()).into_owned().into()),
         v => return Err(ftx.error(format!("cannot convert {v:?} to string"))),
     })
 }

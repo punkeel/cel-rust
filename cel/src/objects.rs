@@ -88,7 +88,7 @@ pub enum Key {
     Int(i64),
     Uint(u64),
     Bool(bool),
-    String(Arc<String>),
+    String(Arc<str>),
 }
 
 impl From<CelMapKey> for Key {
@@ -108,7 +108,7 @@ impl From<Key> for CelMapKey {
             Key::Int(i) => CelMapKey::from(i),
             Key::Uint(u) => CelMapKey::from(u),
             Key::Bool(b) => CelMapKey::from(b),
-            Key::String(s) => CelMapKey::from(s.as_str()),
+            Key::String(s) => CelMapKey::from(s.as_ref()),
         }
     }
 }
@@ -133,7 +133,7 @@ impl AsKeyRef for Key {
             Key::Int(i) => KeyRef::Int(*i),
             Key::Uint(u) => KeyRef::Uint(*u),
             Key::Bool(b) => KeyRef::Bool(*b),
-            Key::String(s) => KeyRef::String(s.as_str()),
+            Key::String(s) => KeyRef::String(&**s),
         }
     }
 }
@@ -187,13 +187,13 @@ impl From<String> for Key {
 
 impl From<Arc<String>> for Key {
     fn from(v: Arc<String>) -> Self {
-        Key::String(v)
+        Key::String(v.as_str().into())
     }
 }
 
 impl<'a> From<&'a str> for Key {
     fn from(v: &'a str) -> Self {
-        Key::String(Arc::new(v.into()))
+        Key::String(v.into())
     }
 }
 
@@ -276,7 +276,7 @@ impl<'a> TryFrom<&'a Value> for KeyRef<'a> {
         match value {
             Value::Int(v) => Ok(KeyRef::Int(*v)),
             Value::UInt(v) => Ok(KeyRef::Uint(*v)),
-            Value::String(v) => Ok(KeyRef::String(v.as_str())),
+            Value::String(v) => Ok(KeyRef::String(&**v)),
             Value::Bool(v) => Ok(KeyRef::Bool(*v)),
             _ => Err(value.clone()),
         }
@@ -539,7 +539,7 @@ pub enum Value {
     Int(i64),
     UInt(u64),
     Float(f64),
-    String(Arc<String>),
+    String(Arc<str>),
     Bytes(Arc<Vec<u8>>),
     Bool(bool),
     #[cfg(feature = "chrono")]
@@ -860,8 +860,8 @@ impl TryFrom<&dyn Val> for Value {
             Kind::Double => Ok(Value::Float(
                 *v.downcast_ref::<CelDouble>().unwrap().inner(),
             )),
-            Kind::String => Ok(Value::String(Arc::new(
-                v.downcast_ref::<CelString>().unwrap().inner().to_string(),
+            Kind::String => Ok(Value::String(Arc::from(
+                v.downcast_ref::<CelString>().unwrap().inner(),
             ))),
             Kind::NullType => Ok(Value::Null),
             Kind::Bytes => Ok(Value::Bytes(Arc::new(
@@ -949,7 +949,7 @@ impl TryFrom<Value> for Box<dyn Val> {
             Value::Int(i) => Ok(Box::new(CelInt::from(i))),
             Value::UInt(u) => Ok(Box::new(CelUInt::from(u))),
             Value::Float(f) => Ok(Box::new(CelDouble::from(f))),
-            Value::String(s) => Ok(Box::new(CelString::from(s.as_str()))),
+            Value::String(s) => Ok(Box::new(CelString::from(s.as_ref()))),
             Value::Null => Ok(Box::new(CelNull)),
             Value::Bytes(b) => Ok(Box::new(CelBytes::from(b.as_slice().to_vec()))),
             #[cfg(feature = "chrono")]
@@ -1655,11 +1655,11 @@ impl ops::Add<Value> for Value {
 
                 Ok(Value::List(l))
             }
-            (Value::String(mut l), Value::String(r)) => {
-                // If this is the only reference to `l`, we can append to it in place.
-                // `l` is replaced with a clone otherwise.
-                Arc::make_mut(&mut l).push_str(&r);
-                Ok(Value::String(l))
+            (Value::String(l), Value::String(r)) => {
+                // Arc<str> is unsized, so must copy to String for concatenation.
+                let mut s = (*l).to_string();
+                s.push_str(&r);
+                Ok(Value::String(s.into()))
             }
             #[cfg(feature = "chrono")]
             (Value::Duration(l), Value::Duration(r)) => l
@@ -2018,15 +2018,15 @@ mod tests {
     fn reference_to_value() {
         let test = "example".to_string();
         let direct: Value = test.as_str().into();
-        assert_eq!(direct, Value::String(Arc::new(String::from("example"))));
+        assert_eq!(direct, Value::String(Arc::from("example")));
 
         let vec = vec![test.as_str()];
         let indirect: Value = vec.into();
         assert_eq!(
             indirect,
-            Value::List(Arc::new(vec![Value::String(Arc::new(String::from(
+            Value::List(Arc::new(vec![Value::String(Arc::from(
                 "example"
-            )))]))
+            ))]))
         );
     }
 
@@ -2206,7 +2206,7 @@ mod tests {
             ctx.add_function("myFn", my_fn);
             let prog = Program::compile("mine.myFn()").unwrap();
             assert_eq!(
-                Ok(Value::String(Arc::new("value".into()))),
+                Ok(Value::String("value".into())),
                 prog.execute(&ctx)
             );
         }
@@ -2395,7 +2395,7 @@ mod tests {
             assert_eq!(
                 Value::resolve(&expr, &ctx),
                 Ok(Value::Opaque(Arc::new(OptionalValue::of(Value::String(
-                    Arc::new("value".to_string())
+                    Arc::from("value"),
                 )))))
             );
 
@@ -2406,7 +2406,7 @@ mod tests {
             assert_eq!(
                 Value::resolve(&expr, &ctx),
                 Ok(Value::Opaque(Arc::new(OptionalValue::of(Value::String(
-                    Arc::new("value".to_string())
+                    Arc::from("value"),
                 )))))
             );
 
@@ -2425,7 +2425,7 @@ mod tests {
                 .expect("Must parse");
             assert_eq!(
                 Value::resolve(&expr, &ctx),
-                Ok(Value::String(Arc::new("value".to_string())))
+                Ok(Value::String(Arc::from("value")))
             );
 
             let expr = Parser::default()
@@ -2434,7 +2434,7 @@ mod tests {
                 .expect("Must parse");
             assert_eq!(
                 Value::resolve(&expr, &ctx),
-                Ok(Value::String(Arc::new("default".to_string())))
+                Ok(Value::String(Arc::from("default")))
             );
 
             let mut map_ctx = Context::default();
@@ -2738,7 +2738,7 @@ mod tests {
             );
             let program = Program::compile("cel.MyStruct { some: 'value' }.some").unwrap();
             let value = program.execute(&Context::with_env(env.into())).unwrap();
-            assert_eq!(value, Value::String(Arc::new("value".to_owned())));
+            assert_eq!(value, Value::String(Arc::from("value")));
         }
 
         #[test]
@@ -2768,7 +2768,7 @@ mod tests {
             );
             let program = Program::compile("cel.MyStruct { some: 'value' }.here").unwrap();
             let result = program.execute(&Context::with_env(env.into()));
-            assert_eq!(result, Ok(Value::String(Arc::new(String::from("yes")))));
+            assert_eq!(result, Ok(Value::String(Arc::from("yes"))));
         }
 
         #[test]
@@ -2782,7 +2782,7 @@ mod tests {
             let program =
                 Program::compile("cel.MyStruct { some: 'value', here: 'totally' }.here").unwrap();
             let result = program.execute(&Context::with_env(env.into()));
-            assert_eq!(result, Ok(Value::String(Arc::new(String::from("totally")))));
+            assert_eq!(result, Ok(Value::String(Arc::from("totally"))));
         }
 
         #[test]
@@ -2881,7 +2881,7 @@ mod tests {
 
             let program = Program::compile("my_var.name + ' ' + string(my_var.value)").unwrap();
             let result = program.execute(&context).unwrap();
-            assert_eq!(result, Value::String(Arc::new("test 42".to_owned())));
+            assert_eq!(result, Value::String(Arc::from("test 42")));
         }
     }
 }

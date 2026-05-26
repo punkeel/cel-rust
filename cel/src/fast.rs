@@ -172,7 +172,7 @@ pub struct EvalContext {
     values: Box<[Value]>,
     /// Interned strings — persists across `clear()` to avoid
     /// re-allocating common values like `"GET"`, `"/api"`, etc.
-    string_cache: Vec<Arc<String>>,
+    string_cache: Vec<Arc<str>>,
 }
 
 impl EvalContext {
@@ -239,18 +239,18 @@ impl EvalContext {
         self.values[field.0 as usize] = Value::String(arc);
     }
 
-    /// Intern a string: return existing `Arc<String>` if cached,
+    /// Intern a string: return existing `Arc<str>` if cached,
     /// otherwise allocate, cache, and return.
-    fn intern(&mut self, s: &str) -> Arc<String> {
+    fn intern(&mut self, s: &str) -> Arc<str> {
         // Linear scan — fast for small caches (typical: < 10 unique strings).
         // For larger caches a HashMap would be better, but real-world
         // EvalContexts rarely have > 20 unique string values.
         for arc in &self.string_cache {
-            if arc.as_str() == s {
+            if &**arc == s {
                 return Arc::clone(arc);
             }
         }
-        let arc = Arc::new(s.to_string());
+        let arc: Arc<str> = Arc::from(s);
         self.string_cache.push(Arc::clone(&arc));
         arc
     }

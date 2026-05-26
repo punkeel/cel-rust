@@ -6,9 +6,7 @@ use std::sync::Arc;
 fn bench_aho_corasick(c: &mut Criterion) {
     let mut group = c.benchmark_group("aho_corasick");
 
-    let haystack = Value::String(Arc::new(
-        "/api/v1/users/12345/admin/settings/healthz".to_string(),
-    ));
+    let haystack = Value::String(Arc::from("/api/v1/users/12345/admin/settings/healthz"));
     let vars = vec![haystack.clone()];
 
     // 5 individual contains filters (simulating 5 rules)
@@ -81,7 +79,7 @@ fn bench_aho_corasick(c: &mut Criterion) {
     });
 
     // Worst case: haystack that matches NONE
-    let no_match_haystack = Value::String(Arc::new("/home/about/contact".to_string()));
+    let no_match_haystack = Value::String(Arc::from("/home/about/contact"));
     let no_match_vars = vec![no_match_haystack];
 
     group.bench_function("individual_20_no_match", |b| {
@@ -107,11 +105,9 @@ fn bench_ruleset_batch(c: &mut Criterion) {
     let mut group = c.benchmark_group("ruleset_batch");
 
     // Simulate a WAF: 50 rules, 10 of them are `path.contains(x)`
-    let path = Value::String(Arc::new(
-        "/api/v1/users/12345/admin/settings/healthz".to_string(),
-    ));
+    let path = Value::String(Arc::from("/api/v1/users/12345/admin/settings/healthz"));
     let port = Value::Int(8080);
-    let method = Value::String(Arc::new("GET".to_string()));
+    let method = Value::String(Arc::from("GET"));
     let vars = vec![path.clone(), port, method];
 
     // 50 simple rules as individual FilterTree structs

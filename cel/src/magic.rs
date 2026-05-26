@@ -9,7 +9,7 @@ impl_conversions!(
     i64 => Value::Int,
     u64 => Value::UInt,
     f64 => Value::Float,
-    Arc<String> => Value::String,
+    Arc<str> => Value::String,
     Arc<Vec<u8>> => Value::Bytes,
     bool => Value::Bool,
     Arc<Vec<Value>> => Value::List,
@@ -67,7 +67,7 @@ pub trait IntoResolveResult {
 
 impl IntoResolveResult for String {
     fn into_resolve_result(self) -> ResolveResult {
-        Ok(Value::String(Arc::new(self)))
+        Ok(Value::String(self.into()))
     }
 }
 
@@ -114,8 +114,8 @@ pub(crate) trait FromContext<'a, 'context, 'call> {
 /// # let value = program2.execute(&context).unwrap();
 /// # assert_eq!(value, true.into());
 ///
-/// fn starts_with(This(this): This<Arc<String>>, prefix: Arc<String>) -> bool {
-///     this.starts_with(prefix.as_str())
+/// fn starts_with(This(this): This<Arc<str>>, prefix: Arc<str>) -> bool {
+///     this.starts_with(prefix.as_ref())
 /// }
 /// ```
 ///

@@ -92,7 +92,7 @@ fn main() {
     println!("\n--- method == \"GET\" ---\n");
 
     let t2_tree = {
-        let v = vec![Value::String(Arc::new("GET".to_string()))];
+        let v = vec![Value::String(Arc::from("GET"))];
         let f: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 0, val: "GET".to_string() });
         median_ns("method == GET", "Tree", || { std::hint::black_box(f.eval(&v)); })
     };
@@ -192,8 +192,8 @@ fn main() {
 
     let t5_tree = {
         let v = vec![
-            Value::String(Arc::new("GET".to_string())),
-            Value::String(Arc::new("/api".to_string())),
+            Value::String(Arc::from("GET")),
+            Value::String(Arc::from("/api")),
         ];
         let a: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 0, val: "GET".to_string() });
         let b: Box<dyn BoolFilter> = Box::new(EqStrConst { var_idx: 1, val: "/api".to_string() });
