@@ -64,6 +64,10 @@ impl Env {
         }
     }
 
+    pub fn functions(&self) -> &std::collections::BTreeMap<String, FunctionDecl> {
+        &self.functions
+    }
+
     pub fn find_overload(&self, name: &str, args: &[Cow<dyn Val>]) -> Option<Function> {
         match self.functions.get(name) {
             None => None,

@@ -1321,13 +1321,16 @@ impl Value {
                 }
                 match &call.target {
                     None => {
-                        // TODO: Optimize for the 1 and 2 arg cases and avoid the Vec altogether
                         let args: Result<Vec<Cow<dyn Val>>, ExecutionError> = call
                             .args
                             .iter()
                             .map(|a| Value::resolve_val(a, ctx))
                             .collect();
                         let args = args?;
+                        // FAST PATH: resolved function pointer from compile-time overload resolution
+                        if let Some(op) = call.resolved_op {
+                            return op(args);
+                        }
                         if let Some(op) = ctx.env().find_overload(&call.func_name, &args) {
                             return op(args);
                         }
@@ -1360,6 +1363,10 @@ impl Value {
                                 let target = Value::resolve_val(target, ctx)?;
                                 let mut args = args;
                                 args.insert(0, target);
+                                // FAST PATH: resolved member function pointer
+                                if let Some(op) = call.resolved_op {
+                                    return op(args);
+                                }
                                 if let Some(op) =
                                     ctx.env().find_member_overload(&call.func_name, &args)
                                 {

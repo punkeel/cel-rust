@@ -9,6 +9,7 @@ mod macros;
 pub mod common;
 pub mod context;
 mod env;
+pub mod function_handle;
 pub mod parser;
 pub mod vm;
 
@@ -174,6 +175,17 @@ impl Program {
         parser
             .parse(source)
             .map(|expression| Program { expression })
+    }
+
+    /// Compile and resolve function handles using the given environment.
+    /// This enables O(1) function dispatch at runtime for stdlib calls
+    /// with known argument types.
+    pub fn compile_with_env(source: &str, env: &Env) -> Result<Program, ParseErrors> {
+        let parser = Parser::default();
+        let mut expression = parser.parse(source)?;
+        let resolver = crate::function_handle::FunctionResolver::new(env);
+        crate::function_handle::resolve_ast(&mut expression, &resolver);
+        Ok(Program { expression })
     }
 
     pub fn execute(&self, context: &Context) -> ResolveResult {

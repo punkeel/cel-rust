@@ -6,7 +6,7 @@ use crate::common::value::Val;
 
 pub struct FunctionDecl {
     pub name: String,
-    overloads: Vec<OverloadDecl>,
+    pub overloads: Vec<OverloadDecl>,
 }
 
 impl FunctionDecl {
@@ -66,11 +66,9 @@ impl FunctionDecl {
 
 pub struct OverloadDecl {
     pub id: String,
-    arg_types: Vec<Type>,
-    //result_type: &'a Type<'a>,
-    member_function: bool,
-    //operand_traits: TraitSet,
-    op: Function,
+    pub arg_types: Vec<Type>,
+    pub member_function: bool,
+    pub op: Function,
 }
 
 #[allow(dead_code)]

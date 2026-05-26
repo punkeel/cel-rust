@@ -87,8 +87,23 @@ pub struct IdedEntryExpr {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CallExpr {
     pub func_name: String,
+    /// Resolved function pointer for O(1) dispatch.
+    /// Set during compilation when argument types are known.
+    /// None means fall back to dynamic overload resolution.
+    pub resolved_op: Option<crate::common::functions::Function>,
     pub target: Option<Box<IdedExpr>>,
     pub args: Vec<IdedExpr>,
+}
+
+impl CallExpr {
+    pub fn new(func_name: String, target: Option<Box<IdedExpr>>, args: Vec<IdedExpr>) -> Self {
+        Self {
+            func_name,
+            resolved_op: None,
+            target,
+            args,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

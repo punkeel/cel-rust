@@ -75,23 +75,23 @@ fn exists_macro_expander(
     let init = helper.next_expr(Expr::Literal(LiteralValue::Boolean(false.into())));
     let result_binding = "@result".to_string();
     let accu_ident = helper.next_expr(Expr::Ident(result_binding.clone()));
-    let arg = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::LOGICAL_NOT.to_string(),
-        target: None,
-        args: vec![accu_ident],
-    }));
-    let condition = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::NOT_STRICTLY_FALSE.to_string(),
-        target: None,
-        args: vec![arg],
-    }));
+    let arg = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::LOGICAL_NOT.to_string(),
+        None,
+        vec![accu_ident],
+    )));
+    let condition = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::NOT_STRICTLY_FALSE.to_string(),
+        None,
+        vec![arg],
+    )));
 
     arguments.insert(0, helper.next_expr(Expr::Ident(result_binding.clone())));
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::LOGICAL_OR.to_string(),
-        target: None,
-        args: arguments,
-    }));
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::LOGICAL_OR.to_string(),
+        None,
+        arguments,
+    )));
 
     let result = helper.next_expr(Expr::Ident(result_binding.clone()));
 
@@ -126,18 +126,18 @@ fn all_macro_expander(
     let init = helper.next_expr(Expr::Literal(LiteralValue::Boolean(true.into())));
     let result_binding = "@result".to_string();
     let accu_ident = helper.next_expr(Expr::Ident(result_binding.clone()));
-    let condition = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::NOT_STRICTLY_FALSE.to_string(),
-        target: None,
-        args: vec![accu_ident],
-    }));
+    let condition = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::NOT_STRICTLY_FALSE.to_string(),
+        None,
+        vec![accu_ident],
+    )));
 
     arguments.insert(0, helper.next_expr(Expr::Ident(result_binding.clone())));
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::LOGICAL_AND.to_string(),
-        target: None,
-        args: arguments,
-    }));
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::LOGICAL_AND.to_string(),
+        None,
+        arguments,
+    )));
 
     let result = helper.next_expr(Expr::Ident(result_binding.clone()));
 
@@ -178,26 +178,26 @@ fn exists_one_macro_expander(
         helper.next_expr(Expr::Ident(result_binding.clone())),
         helper.next_expr(Expr::Literal(LiteralValue::Int(1.into()))),
     ];
-    arguments.push(helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::ADD.to_string(),
-        target: None,
+    arguments.push(helper.next_expr(Expr::Call(CallExpr::new(
+        operators::ADD.to_string(),
+        None,
         args,
-    })));
+    ))));
     arguments.push(helper.next_expr(Expr::Ident(result_binding.clone())));
 
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::CONDITIONAL.to_string(),
-        target: None,
-        args: arguments,
-    }));
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::CONDITIONAL.to_string(),
+        None,
+        arguments,
+    )));
 
     let accu = helper.next_expr(Expr::Ident(result_binding.clone()));
     let one = helper.next_expr(Expr::Literal(LiteralValue::Int(1.into())));
-    let result = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::EQUALS.to_string(),
-        target: None,
-        args: vec![accu, one],
-    }));
+    let result = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::EQUALS.to_string(),
+        None,
+        vec![accu, one],
+    )));
 
     Ok(
         helper.next_expr(Expr::Comprehension(Box::new(ComprehensionExpr {
@@ -238,20 +238,20 @@ fn map_macro_expander(
         helper.next_expr(Expr::Ident(result_binding.clone())),
         helper.next_expr(Expr::List(ListExpr::new(vec![func]))),
     ];
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::ADD.to_string(),
-        target: None,
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::ADD.to_string(),
+        None,
         args,
-    }));
+    )));
 
     let step = match filter {
         Some(filter) => {
             let accu = helper.next_expr(Expr::Ident(result_binding.clone()));
-            helper.next_expr(Expr::Call(CallExpr {
-                func_name: operators::CONDITIONAL.to_string(),
-                target: None,
-                args: vec![filter, step, accu],
-            }))
+            helper.next_expr(Expr::Call(CallExpr::new(
+                operators::CONDITIONAL.to_string(),
+                None,
+                vec![filter, step, accu],
+            )))
         }
         None => step,
     };
@@ -296,18 +296,18 @@ fn filter_macro_expander(
         helper.next_expr(Expr::Ident(result_binding.clone())),
         helper.next_expr(Expr::List(ListExpr::new(vec![var]))),
     ];
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::ADD.to_string(),
-        target: None,
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::ADD.to_string(),
+        None,
         args,
-    }));
+    )));
 
     let accu = helper.next_expr(Expr::Ident(result_binding.clone()));
-    let step = helper.next_expr(Expr::Call(CallExpr {
-        func_name: operators::CONDITIONAL.to_string(),
-        target: None,
-        args: vec![filter, step, accu],
-    }));
+    let step = helper.next_expr(Expr::Call(CallExpr::new(
+        operators::CONDITIONAL.to_string(),
+        None,
+        vec![filter, step, accu],
+    )));
 
     let result = helper.next_expr(Expr::Ident(result_binding.clone()));
 

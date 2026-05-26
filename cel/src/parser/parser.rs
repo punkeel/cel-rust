@@ -145,11 +145,7 @@ impl Parser {
         match macros::find_expander(&func_name, None, &args) {
             None => IdedExpr {
                 id,
-                expr: Expr::Call(CallExpr {
-                    target: None,
-                    func_name,
-                    args,
-                }),
+                expr: Expr::Call(CallExpr::new(func_name, None, args)),
             },
             Some(expander) => {
                 let mut helper = MacroExprHelper {
@@ -174,11 +170,7 @@ impl Parser {
         match macros::find_expander(&func_name, Some(&target), &args) {
             None => IdedExpr {
                 id,
-                expr: Expr::Call(CallExpr {
-                    target: Some(Box::new(target)),
-                    func_name,
-                    args,
-                }),
+                expr: Expr::Call(CallExpr::new(func_name, Some(Box::new(target)), args)),
             },
             Some(expander) => {
                 let mut helper = MacroExprHelper {
@@ -1144,11 +1136,11 @@ impl LogicManager {
 
         IdedExpr {
             id: self.ops[mid],
-            expr: Expr::Call(CallExpr {
-                target: None,
-                func_name: self.function.clone(),
-                args: vec![left, right],
-            }),
+            expr: Expr::Call(CallExpr::new(
+                self.function.clone(),
+                None,
+                vec![left, right],
+            )),
         }
     }
 }
