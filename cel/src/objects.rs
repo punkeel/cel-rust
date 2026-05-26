@@ -1283,6 +1283,29 @@ impl Value {
                         }
                         operators::IN => {
                             let lhs = Value::resolve_val(&call.args[0], ctx)?;
+                            // Fast path: rhs is a list literal, avoid creating the list container
+                            if let Expr::List(list_expr) = &call.args[1].expr {
+                                for (idx, element) in list_expr.elements.iter().enumerate() {
+                                    if list_expr.optional_indices.contains(&idx) {
+                                        let rhs = Value::resolve_val(element, ctx)?;
+                                        if let Some(opt_val) = rhs.downcast_ref::<CelOptional>() {
+                                            if let Some(v) = opt_val.inner() {
+                                                if lhs.eq(&Cow::Borrowed(v)) {
+                                                    return Ok(bool(true));
+                                                }
+                                            }
+                                        } else if lhs.eq(&rhs) {
+                                            return Ok(bool(true));
+                                        }
+                                    } else {
+                                        let rhs = Value::resolve_val(element, ctx)?;
+                                        if lhs.eq(&rhs) {
+                                            return Ok(bool(true));
+                                        }
+                                    }
+                                }
+                                return Ok(bool(false));
+                            }
                             let rhs = Value::resolve_val(&call.args[1], ctx)?;
                             return if let Some(container) = rhs.as_container() {
                                 Ok(bool(container.contains(lhs.as_ref())?))
