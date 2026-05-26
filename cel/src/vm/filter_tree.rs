@@ -23,8 +23,8 @@ impl I64Expr {
     pub fn eval(&self, vars: &[Value]) -> i64 {
         match self {
             Self::Literal(v) => *v,
-            Self::Var(idx) => match vars.get(*idx) {
-                Some(Value::Int(i)) => *i,
+            Self::Var(idx) => match &vars[*idx] {
+                Value::Int(i) => *i,
                 _ => 0,
             },
             Self::Add(a, b) => a.eval(vars).wrapping_add(b.eval(vars)),
@@ -61,8 +61,8 @@ impl StrExpr {
     pub fn eval_borrow<'a>(&'a self, vars: &'a [Value]) -> Option<&'a str> {
         match self {
             Self::Literal(s) => Some(s.as_str()),
-            Self::Var(idx) => match vars.get(*idx) {
-                Some(Value::String(s)) => Some(s.as_str()),
+            Self::Var(idx) => match &vars[*idx] {
+                Value::String(s) => Some(s.as_str()),
                 _ => Some(""),
             },
             Self::Concat(_, _) => None,
@@ -74,8 +74,8 @@ impl StrExpr {
     pub fn eval_owned(&self, vars: &[Value]) -> String {
         match self {
             Self::Literal(s) => s.clone(),
-            Self::Var(idx) => match vars.get(*idx) {
-                Some(Value::String(s)) => s.as_str().to_string(),
+            Self::Var(idx) => match &vars[*idx] {
+                Value::String(s) => s.as_str().to_string(),
                 _ => String::new(),
             },
             Self::Concat(a, b) => {
@@ -91,8 +91,8 @@ impl StrExpr {
     pub fn len(&self, vars: &[Value]) -> usize {
         match self {
             Self::Literal(s) => s.len(),
-            Self::Var(idx) => match vars.get(*idx) {
-                Some(Value::String(s)) => s.len(),
+            Self::Var(idx) => match &vars[*idx] {
+                Value::String(s) => s.len(),
                 _ => 0,
             },
             Self::Concat(a, b) => a.len(vars) + b.len(vars),
@@ -110,8 +110,8 @@ impl ListExpr {
     #[inline(always)]
     pub fn eval<'a>(&'a self, vars: &'a [Value]) -> Option<&'a Vec<Value>> {
         match self {
-            Self::Var(idx) => match vars.get(*idx) {
-                Some(Value::List(list)) => Some(list),
+            Self::Var(idx) => match &vars[*idx] {
+                Value::List(list) => Some(list),
                 _ => None,
             },
         }
@@ -146,8 +146,8 @@ pub struct EqIntConst {
 impl BoolFilter for EqIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i == self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i == self.val,
             _ => false,
         }
     }
@@ -160,8 +160,8 @@ pub struct NeIntConst {
 impl BoolFilter for NeIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i != self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i != self.val,
             _ => false,
         }
     }
@@ -174,8 +174,8 @@ pub struct LtIntConst {
 impl BoolFilter for LtIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i < self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i < self.val,
             _ => false,
         }
     }
@@ -188,8 +188,8 @@ pub struct LeIntConst {
 impl BoolFilter for LeIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i <= self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i <= self.val,
             _ => false,
         }
     }
@@ -202,8 +202,8 @@ pub struct GtIntConst {
 impl BoolFilter for GtIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i > self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i > self.val,
             _ => false,
         }
     }
@@ -216,8 +216,8 @@ pub struct GeIntConst {
 impl BoolFilter for GeIntConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => *i >= self.val,
+        match &vars[self.var_idx] {
+            Value::Int(i) => *i >= self.val,
             _ => false,
         }
     }
@@ -237,8 +237,8 @@ macro_rules! define_arith_cmp {
         impl BoolFilter for $name {
             #[inline(always)]
             fn eval(&self, vars: &[Value]) -> bool {
-                match vars.get(self.var_idx) {
-                    Some(Value::Int(i)) => i.$arith_op(self.arith) $cmp_op self.cmp,
+                match &vars[self.var_idx] {
+                    Value::Int(i) => i.$arith_op(self.arith) $cmp_op self.cmp,
                     _ => false,
                 }
             }
@@ -274,8 +274,8 @@ pub struct EqStrConst {
 impl BoolFilter for EqStrConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => s.as_str() == self.val,
+        match &vars[self.var_idx] {
+            Value::String(s) => s.as_str() == self.val,
             _ => false,
         }
     }
@@ -290,8 +290,8 @@ pub struct InIntSet<const N: usize> {
 impl<const N: usize> BoolFilter for InIntSet<N> {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => self.vals.contains(i),
+        match &vars[self.var_idx] {
+            Value::Int(i) => self.vals.contains(i),
             _ => false,
         }
     }
@@ -305,8 +305,8 @@ pub struct InStrSet<const N: usize> {
 impl<const N: usize> BoolFilter for InStrSet<N> {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => self.vals.iter().any(|v| s.as_str() == v),
+        match &vars[self.var_idx] {
+            Value::String(s) => self.vals.iter().any(|v| s.as_str() == v),
             _ => false,
         }
     }
@@ -321,8 +321,8 @@ pub struct InIntLinearSet {
 impl BoolFilter for InIntLinearSet {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => self.vals.contains(i),
+        match &vars[self.var_idx] {
+            Value::Int(i) => self.vals.contains(i),
             _ => false,
         }
     }
@@ -336,8 +336,8 @@ pub struct InStrLinearSet {
 impl BoolFilter for InStrLinearSet {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => self.vals.iter().any(|v| s.as_str() == v),
+        match &vars[self.var_idx] {
+            Value::String(s) => self.vals.iter().any(|v| s.as_str() == v),
             _ => false,
         }
     }
@@ -352,8 +352,8 @@ pub struct InIntHashSet {
 impl BoolFilter for InIntHashSet {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::Int(i)) => self.set.contains(i),
+        match &vars[self.var_idx] {
+            Value::Int(i) => self.set.contains(i),
             _ => false,
         }
     }
@@ -367,8 +367,8 @@ pub struct InStrHashSet {
 impl BoolFilter for InStrHashSet {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => self.set.contains(s.as_ref()),
+        match &vars[self.var_idx] {
+            Value::String(s) => self.set.contains(s.as_ref()),
             _ => false,
         }
     }
@@ -383,8 +383,8 @@ pub struct StartsWithConst {
 impl BoolFilter for StartsWithConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => s.starts_with(&self.prefix),
+        match &vars[self.var_idx] {
+            Value::String(s) => s.starts_with(&self.prefix),
             _ => false,
         }
     }
@@ -397,8 +397,8 @@ pub struct EndsWithConst {
 impl BoolFilter for EndsWithConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => s.ends_with(&self.suffix),
+        match &vars[self.var_idx] {
+            Value::String(s) => s.ends_with(&self.suffix),
             _ => false,
         }
     }
@@ -411,8 +411,8 @@ pub struct ContainsConst {
 impl BoolFilter for ContainsConst {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => s.contains(&self.substring),
+        match &vars[self.var_idx] {
+            Value::String(s) => s.contains(&self.substring),
             _ => false,
         }
     }
@@ -428,8 +428,8 @@ pub struct ContainsAny {
 impl BoolFilter for ContainsAny {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => {
+        match &vars[self.var_idx] {
+            Value::String(s) => {
                 let text = s.as_str();
                 // Unroll-like: the compiler usually unrolls this for small Vecs
                 for needle in &self.needles {
@@ -455,8 +455,8 @@ pub struct AhoCorasickContains {
 impl BoolFilter for AhoCorasickContains {
     #[inline(always)]
     fn eval(&self, vars: &[Value]) -> bool {
-        match vars.get(self.var_idx) {
-            Some(Value::String(s)) => {
+        match &vars[self.var_idx] {
+            Value::String(s) => {
                 let text = s.as_bytes();
                 // Fast path: OR semantics (any single match is enough).
                 // is_match() is measurably faster than find_iter() for simple yes/no.

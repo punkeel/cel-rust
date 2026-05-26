@@ -142,6 +142,11 @@ impl Default for Schema {
 /// Pre-allocated flat array of `Value`. Every `set_*` call is a single
 /// array write — no hashing, no name resolution.
 ///
+/// String values are internally cached (`intern`-ed) so that repeated
+/// `set_str("GET")` calls only allocate the first time — subsequent
+/// calls are a linear scan + `Arc::clone` (~3 ns vs ~30 ns).
+/// The cache persists across `clear()` calls.
+///
 /// Unset fields have value `Value::Null`. The filter tree handles this
 /// correctly: `Null == 80` evaluates to `false`.
 ///
@@ -165,6 +170,9 @@ impl Default for Schema {
 /// ```
 pub struct EvalContext {
     values: Box<[Value]>,
+    /// Interned strings — persists across `clear()` to avoid
+    /// re-allocating common values like `"GET"`, `"/api"`, etc.
+    string_cache: Vec<Arc<String>>,
 }
 
 impl EvalContext {
@@ -174,7 +182,10 @@ impl EvalContext {
     #[inline]
     pub fn new(schema: &Schema) -> Self {
         let values = vec![Value::Null; schema.field_count()].into_boxed_slice();
-        Self { values }
+        Self {
+            values,
+            string_cache: Vec::new(),
+        }
     }
 
     /// Set any field value. O(1) — single array write.
@@ -211,16 +222,37 @@ impl EvalContext {
         self.values[field.0 as usize] = Value::Bool(val);
     }
 
-    /// Set a string field from a `&str`. O(1) + Arc allocation.
+    /// Set a string field from a `&str`. O(1) + Arc allocation on first
+    /// unique string; subsequent calls with the same string are a
+    /// linear scan + `Arc::clone` (~3 ns).
     #[inline]
     pub fn set_str(&mut self, field: Field, val: &str) {
-        self.values[field.0 as usize] = Value::String(Arc::new(val.to_string()));
+        let arc = self.intern(val);
+        self.values[field.0 as usize] = Value::String(arc);
     }
 
-    /// Set a string field from an owned `String`. O(1) + Arc allocation.
+    /// Set a string field from an owned `String`. O(1) + Arc allocation
+    /// on first unique string; cached on subsequent calls.
     #[inline]
     pub fn set_string(&mut self, field: Field, val: String) {
-        self.values[field.0 as usize] = Value::String(Arc::new(val));
+        let arc = self.intern(val.as_str());
+        self.values[field.0 as usize] = Value::String(arc);
+    }
+
+    /// Intern a string: return existing `Arc<String>` if cached,
+    /// otherwise allocate, cache, and return.
+    fn intern(&mut self, s: &str) -> Arc<String> {
+        // Linear scan — fast for small caches (typical: < 10 unique strings).
+        // For larger caches a HashMap would be better, but real-world
+        // EvalContexts rarely have > 20 unique string values.
+        for arc in &self.string_cache {
+            if arc.as_str() == s {
+                return Arc::clone(arc);
+            }
+        }
+        let arc = Arc::new(s.to_string());
+        self.string_cache.push(Arc::clone(&arc));
+        arc
     }
 
     /// Get a field value by handle. O(1).
