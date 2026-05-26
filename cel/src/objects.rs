@@ -1555,8 +1555,12 @@ impl Value {
     }
 }
 
+static CEL_TRUE: LazyLock<CelBool> = LazyLock::new(|| true.into());
+static CEL_FALSE: LazyLock<CelBool> = LazyLock::new(|| false.into());
+
 fn bool<'a>(boolean: bool) -> Cow<'a, dyn Val> {
-    Cow::<dyn Val>::Owned(Box::new(CelBool::from(boolean)))
+    let val: &dyn Val = if boolean { &*CEL_TRUE } else { &*CEL_FALSE };
+    Cow::Borrowed(val)
 }
 
 fn try_bool(val: Result<Cow<dyn Val>, ExecutionError>) -> Result<bool, ExecutionError> {
