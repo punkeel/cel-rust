@@ -11,6 +11,7 @@
 //!   func_call:  10%   (size("hello"))
 
 use cel::context::Context;
+use cel::fast::{EvalContext, FieldType, Filter, Schema};
 use cel::objects::Value;
 use cel::vm::filter_tree::{BoolFilter, EqIntConst, EqStrConst};
 use cel::Program;
@@ -187,6 +188,38 @@ fn main() {
         bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
     };
 
+    // --- Filter + EvalContext (Schema API) ---
+    println!("\nFilter+EvalContext:");
+    let schema_int_eq = {
+        let p = Program::compile("port == 80").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let vars = vec![Value::Int(80)];
+        bench("int_eq", || { std::hint::black_box(tree.filter.eval(&vars)); })
+    };
+    let schema_str_eq = {
+        let p = Program::compile("country == 'GB'").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let vars = vec![Value::String(Arc::new("GB".to_string()))];
+        bench("str_eq", || { std::hint::black_box(tree.filter.eval(&vars)); })
+    };
+    let schema_in_set = {
+        let p = Program::compile("port in [80, 443, 8080, 8443, 21, 22, 23]").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let vars = vec![Value::Int(80)];
+        bench("in_set", || { std::hint::black_box(tree.filter.eval(&vars)); })
+    };
+    let schema_arith_cmp = {
+        let p = Program::compile("port + 100 >= 1024").unwrap();
+        let tree = p.compile_tree().unwrap();
+        let vars = vec![Value::Int(924)];
+        bench("arith_cmp", || { std::hint::black_box(tree.filter.eval(&vars)); })
+    };
+    let schema_func_call = {
+        let vars = vec![Value::String(Arc::new("hello".to_string()))];
+        let f: Box<dyn BoolFilter> = Box::new(EqIntConst { var_idx: 0, val: 1 });
+        bench("func_call (proxy)", || { std::hint::black_box(f.eval(&vars)); })
+    };
+
     // --- Compute scores ---
     let ast_score = ast_int_eq * W_INT_EQ
         + ast_int_eq * W_INT_RANGE
@@ -209,12 +242,20 @@ fn main() {
         + tree_arith_cmp * W_ARITH_CMP
         + tree_func_call * W_FUNC_CALL;
 
+    let schema_score = schema_int_eq * W_INT_EQ
+        + schema_int_eq * W_INT_RANGE
+        + schema_str_eq * W_STR_EQ
+        + schema_in_set * W_IN_SET
+        + schema_arith_cmp * W_ARITH_CMP
+        + schema_func_call * W_FUNC_CALL;
+
     println!("\n=== SCORECARD ===");
-    println!("AST score:   {:>8.1} ns", ast_score);
-    println!("Fast score:  {:>8.1} ns", fast_score);
-    println!("Tree score:  {:>8.1} ns", tree_score);
-    println!("Fast vs AST: {:>8.1}x faster", ast_score / fast_score);
-    println!("Fast vs Tree:{:>8.1}x slower (overhead)", fast_score / tree_score);
-    println!("Tree vs AST: {:>8.1}x faster", ast_score / tree_score);
+    println!("AST score:         {:>8.1} ns", ast_score);
+    println!("Fast (bind_vars):  {:>8.1} ns", fast_score);
+    println!("Filter+EvalContext:{:>8.1} ns", schema_score);
+    println!("Tree (manual):     {:>8.1} ns", tree_score);
+    println!("Fast  vs AST:      {:>8.1}x", ast_score / fast_score);
+    println!("Schema vs AST:     {:>8.1}x", ast_score / schema_score);
+    println!("Schema vs Fast:    {:>8.1}x", fast_score / schema_score);
     println!("=================");
 }

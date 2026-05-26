@@ -1,0 +1,42 @@
+You are optimizing the cel-rust CEL expression evaluator. The workspace is /tmp/cel-rust/cel.
+
+TARGET METRIC: minimize the AST evaluator score (ns)
+Run it with:
+  cargo run --example score --release 2>&1 | grep "AST score:"
+
+RULES:
+1. First, run the score 3 times to establish a baseline median.
+   Write it to /tmp/cel-rust/cel/.opt_log.txt with a header line.
+2. Each iteration (max 30):
+   a. Read .opt_log.txt for best_known score.
+   b. Form ONE hypothesis about why the AST evaluator is slow.
+   c. Make ONE small code change in ONE file.
+   d. Compile: cargo check -p cel
+   e. Run the score 3×, take median.
+   f. If median < best_known:
+      - git add <file>
+      - git commit -m "perf: iteration N - <one-line hypothesis>"
+      - Update best_known in log.
+   g. If median >= best_known:
+      - git checkout -- <file> (REVERT IMMEDIATELY)
+   h. Append to .opt_log.txt:
+      iter=N file=<file> hypothesis="..." score=<median> delta_vs_best=<X>% outcome=keep|discard
+3. Stop after 30 iterations OR after 5 consecutive discards.
+4. If cargo test -p cel --lib fails after a change, revert immediately and record as "test_failure".
+5. NEVER add new pub or pub(crate) API surface.
+6. If compile fails, revert and record as "compile_failure".
+7. Prefer optimizations that improve the weighted score:
+   int_eq (35%), in_set (15%), str_eq (15%), arith_cmp (10%), func_call (10%)
+
+OPTIMIZATION HINTS (investigate these):
+- execute_vm() recompiles the VM program EVERY call. Cache it in Program.
+- Value::resolve_val() returns Cow<dyn Val> but almost always allocates.
+- Context variable lookup uses BTreeMap. Try HashMap or a flat Vec.
+- Function calls allocate a Vec<Cow<dyn Val>> for args on every call.
+- String values use Arc<String>. For short strings (<16 bytes), use inline storage.
+- The Value enum is large (128+ bytes). Consider Box<Variant> for rare variants.
+- The AST evaluator recursively walks the tree. Consider iterative evaluation.
+- Env::find_overload() iterates a Vec of overloads. Use a HashMap by arity+types.
+- Program::compile() could pre-resolve all variable indices into flat u8 offsets.
+
+Report the final best-known score and which commit achieved it.

@@ -149,6 +149,42 @@ impl EvalContext {
         self.values[field.0 as usize] = value;
     }
 
+    /// Set an integer field value. O(1).
+    #[inline]
+    pub fn set_i64(&mut self, field: Field, val: i64) {
+        self.values[field.0 as usize] = Value::Int(val);
+    }
+
+    /// Set an unsigned integer field value. O(1).
+    #[inline]
+    pub fn set_u64(&mut self, field: Field, val: u64) {
+        self.values[field.0 as usize] = Value::UInt(val);
+    }
+
+    /// Set a floating-point field value. O(1).
+    #[inline]
+    pub fn set_f64(&mut self, field: Field, val: f64) {
+        self.values[field.0 as usize] = Value::Float(val);
+    }
+
+    /// Set a boolean field value. O(1).
+    #[inline]
+    pub fn set_bool(&mut self, field: Field, val: bool) {
+        self.values[field.0 as usize] = Value::Bool(val);
+    }
+
+    /// Set a string field value from a `&str`. O(1) — allocates Arc<String>.
+    #[inline]
+    pub fn set_str(&mut self, field: Field, val: &str) {
+        self.values[field.0 as usize] = Value::String(Arc::new(val.to_string()));
+    }
+
+    /// Set a string field value from a `String`. O(1).
+    #[inline]
+    pub fn set_string(&mut self, field: Field, val: String) {
+        self.values[field.0 as usize] = Value::String(Arc::new(val));
+    }
+
     /// Get a field value by handle. O(1).
     #[inline]
     pub fn get(&self, field: Field) -> &Value {

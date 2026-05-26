@@ -1,0 +1,8 @@
+baseline_scores=148.1,147.9,150.0 median=148.1
+iter=1 file=src/objects.rs hypothesis="avoid allocating CelBool by returning static borrowed constants" score=132.5 delta_vs_best=10.5% outcome=keep
+iter=2 file=src/context.rs hypothesis="Context variable lookup uses BTreeMap -> HashMap for faster single-item lookup" score=150.5 delta_vs_best=-13.6% outcome=discard
+iter=3 file=src/objects.rs hypothesis="fast-path IN operator for list literals to avoid list allocation" score=69.0 delta_vs_best=47.9% outcome=keep
+iter=4 file=src/function_handle.rs hypothesis="include target type hint in member function overload resolution" score=61.0 delta_vs_best=11.6% outcome=keep
+iter=5 file=src/objects.rs hypothesis="add CelInt fast paths for EQUALS, comparisons, and ADD" score=60.2 delta_vs_best=1.3% outcome=keep
+iter=6 file=src/objects.rs hypothesis="pre-allocate function argument Vecs to avoid reallocations" score=58.1 delta_vs_best=3.5% outcome=keep
+iter=7 file=src/context.rs hypothesis="replace BTreeMap with Vec for context variable lookup" score=57.5 delta_vs_best=1.0% outcome=keep
