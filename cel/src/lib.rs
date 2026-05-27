@@ -193,24 +193,6 @@ impl Program {
         Value::resolve(&self.expression, context)
     }
 
-    /// Evaluate the expression, trying the compiled filter tree first
-    /// for boolean expressions, then falling back to the AST interpreter.
-    pub(crate) fn execute_fast(&self, context: &Context) -> ResolveResult {
-        if let Ok(compiled) = vm::compile_filter_tree(&self.expression) {
-            let vars = compiled.bind_vars(context);
-            // Safety: bind_vars extracts values from the context with correct types.
-            Ok(Value::Bool(unsafe { compiled.filter.eval_fast(&vars) }))
-        } else {
-            self.execute(context)
-        }
-    }
-
-    /// Compile the expression into a filter tree for fast boolean evaluation.
-    /// Returns None if the expression can't be compiled to a tree (e.g. non-boolean).
-    pub(crate) fn compile_tree(&self) -> Option<vm::filter_tree_compiler::CompiledFilterTree> {
-        vm::compile_filter_tree(&self.expression).ok()
-    }
-
     /// Returns the variables and functions referenced by the CEL program
     ///
     /// # Example

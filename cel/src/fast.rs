@@ -479,15 +479,7 @@ impl Filter {
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
         let tree = self.tree.as_ref().unwrap();
-        // Safety: Schema guarantees all field indices are in-bounds,
-        // all value types match, and typed arrays are populated.
-        unsafe {
-            if let Some(fast) = &tree.fast_eval {
-                fast(ctx.ints(), ctx.strings())
-            } else {
-                tree.filter.eval_fast(ctx.as_slice())
-            }
-        }
+        matches!(tree.compiled.eval(ctx.as_slice()), Value::Bool(true))
     }
 
     /// Variable names referenced by this filter, in index order.

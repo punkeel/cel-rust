@@ -1,20 +1,19 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
+use crate::vm::filter_tree::{CompiledFilterNode, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
 use crate::objects::Value;
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct CompiledFilterTree {
-    pub filter: Box<FilterNode>,
-    pub fast_eval: Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> bool>>,
+    pub compiled: CompiledFilterNode,
     pub var_names: Vec<String>,
 }
 
 impl CompiledFilterTree {
     pub fn eval(&self, vars: &[crate::objects::Value]) -> bool {
-        self.filter.eval(vars)
+        matches!(self.compiled.eval(vars), Value::Bool(true))
     }
 
     pub fn bind_vars(&self, ctx: &crate::Context) -> Vec<crate::objects::Value> {
@@ -26,322 +25,6 @@ impl CompiledFilterTree {
                     .unwrap_or(crate::objects::Value::Null)
             })
             .collect()
-    }
-}
-
-/// Generate a closure for an I64Expr (integer sub-expression).
-/// Enables closure-based eval for `size(path) > 5` and similar patterns.
-fn compile_closure_i64(expr: &I64Expr) -> Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> i64>> {
-    match expr {
-        I64Expr::Literal(v) => {
-            let v = *v;
-            Some(Box::new(move |_, _| v))
-        }
-        I64Expr::Var(idx) => {
-            let i = *idx;
-            Some(Box::new(move |ints, _| ints[i]))
-        }
-        I64Expr::Add(a, b) => {
-            let a_fn = compile_closure_i64(a)?;
-            let b_fn = compile_closure_i64(b)?;
-            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_add(b_fn(ints, s))))
-        }
-        I64Expr::Sub(a, b) => {
-            let a_fn = compile_closure_i64(a)?;
-            let b_fn = compile_closure_i64(b)?;
-            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_sub(b_fn(ints, s))))
-        }
-        I64Expr::Mul(a, b) => {
-            let a_fn = compile_closure_i64(a)?;
-            let b_fn = compile_closure_i64(b)?;
-            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_mul(b_fn(ints, s))))
-        }
-        I64Expr::Div(a, b) => {
-            let a_fn = compile_closure_i64(a)?;
-            let b_fn = compile_closure_i64(b)?;
-            Some(Box::new(move |ints, s| {
-                let bv = b_fn(ints, s);
-                if bv == 0 { 0 } else { a_fn(ints, s).wrapping_div(bv) }
-            }))
-        }
-        I64Expr::Mod(a, b) => {
-            let a_fn = compile_closure_i64(a)?;
-            let b_fn = compile_closure_i64(b)?;
-            Some(Box::new(move |ints, s| {
-                let bv = b_fn(ints, s);
-                if bv == 0 { 0 } else { a_fn(ints, s).wrapping_rem(bv) }
-            }))
-        }
-        I64Expr::Neg(a) => {
-            let a_fn = compile_closure_i64(a)?;
-            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_neg()))
-        }
-        I64Expr::StrLen(s) => match s.as_ref() {
-            StrExpr::Literal(st) => {
-                let len = st.len() as i64;
-                Some(Box::new(move |_, _| len))
-            }
-            StrExpr::Var(idx) => {
-                let i = *idx;
-                Some(Box::new(move |_, strings| strings[i].len() as i64))
-            }
-            StrExpr::Concat(a, b) => {
-                // Can't handle concat length without allocation — fall back
-                None
-            }
-        },
-        I64Expr::ListLen(_) => None, // ListExpr needs full Value enum
-    }
-}
-
-/// Generate a closure-based fast evaluator for a compiled filter node.
-/// Returns `None` for expressions that can't use typed arrays (I64Expr, etc.).
-pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> bool>> {
-    match node {
-        // ── Int comparisons ──
-        FilterNode::EqInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] == v))
-        }
-        FilterNode::NeInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] != v))
-        }
-        FilterNode::LtInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] < v))
-        }
-        FilterNode::LeInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] <= v))
-        }
-        FilterNode::GtInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] > v))
-        }
-        FilterNode::GeInt { idx, val } => {
-            let (i, v) = (*idx, *val);
-            Some(Box::new(move |ints, _| ints[i] >= v))
-        }
-
-        // ── Fused arithmetic + comparison ──
-        FilterNode::AddEq { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) == c))
-        }
-        FilterNode::AddNe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) != c))
-        }
-        FilterNode::AddLt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) < c))
-        }
-        FilterNode::AddLe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) <= c))
-        }
-        FilterNode::AddGt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) > c))
-        }
-        FilterNode::AddGe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) >= c))
-        }
-        FilterNode::SubEq { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) == c))
-        }
-        FilterNode::SubNe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) != c))
-        }
-        FilterNode::SubLt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) < c))
-        }
-        FilterNode::SubLe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) <= c))
-        }
-        FilterNode::SubGt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) > c))
-        }
-        FilterNode::SubGe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) >= c))
-        }
-        FilterNode::MulEq { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) == c))
-        }
-        FilterNode::MulNe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) != c))
-        }
-        FilterNode::MulLt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) < c))
-        }
-        FilterNode::MulLe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) <= c))
-        }
-        FilterNode::MulGt { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) > c))
-        }
-        FilterNode::MulGe { idx, arith, cmp } => {
-            let (i, a, c) = (*idx, *arith, *cmp);
-            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) >= c))
-        }
-
-        // ── String comparison ──
-        FilterNode::EqStr { idx, val } => {
-            let i = *idx;
-            let v: Arc<str> = Arc::from(val.as_str());
-            Some(Box::new(move |_, strings| {
-                strings[i].as_ref() == v.as_ref()
-            }))
-        }
-        FilterNode::NeStr { idx, val } => {
-            let i = *idx;
-            let v: Arc<str> = Arc::from(val.as_str());
-            Some(Box::new(move |_, strings| {
-                strings[i].as_ref() != v.as_ref()
-            }))
-        }
-
-        // ── Boolean field predicates (can't use typed arrays) ──
-        FilterNode::BoolVar { .. } => None,
-        FilterNode::InIntLinear { idx, vals } => {
-            let i = *idx;
-            let v = vals.clone();
-            Some(Box::new(move |ints, _| v.contains(&ints[i])))
-        }
-        FilterNode::InIntHash { .. } => {
-            // Can't clone a HashSet cheaply — fall back
-            None
-        }
-
-        // ── Set membership: str ──
-        FilterNode::InStrLinear { idx, vals } => {
-            let i = *idx;
-            let v = vals.clone();
-            Some(Box::new(move |_, strings| {
-                let s: &str = strings[i].as_ref();
-                v.iter().any(|x| x == s)
-            }))
-        }
-        FilterNode::InStrHash { .. } => None,
-
-        // ── String methods ──
-        FilterNode::StartsWith { idx, prefix } => {
-            let i = *idx;
-            let p: Arc<str> = Arc::from(prefix.as_str());
-            Some(Box::new(move |_, strings| strings[i].starts_with(p.as_ref())))
-        }
-        FilterNode::EndsWith { idx, suffix } => {
-            let i = *idx;
-            let s: Arc<str> = Arc::from(suffix.as_str());
-            Some(Box::new(move |_, strings| strings[i].ends_with(s.as_ref())))
-        }
-        FilterNode::Contains { idx, substring } => {
-            let i = *idx;
-            let sub: Arc<str> = Arc::from(substring.as_str());
-            Some(Box::new(move |_, strings| strings[i].contains(sub.as_ref())))
-        }
-
-        // ── Regex matches (pre-compiled regex captured in closure) ──
-        FilterNode::Matches { idx, regex } => {
-            let i = *idx;
-            // Regex was pre-compiled at compile time in try_compile_target_str_bool
-            // We need to move the regex out. Since FilterNode doesn't own it separately
-            // from the closure, we clone the hint. But regex::Regex is cheap to clone.
-            let re = regex.clone();
-            Some(Box::new(move |_, strings| re.is_match(strings[i].as_ref())))
-        }
-
-        // ── Multi-pattern contains ──
-        FilterNode::ContainsAny { idx, needles } => {
-            let i = *idx;
-            let n = needles.clone();
-            Some(Box::new(move |_, strings| {
-                let text: &str = strings[i].as_ref();
-                for needle in &n {
-                    if text.contains(needle.as_str()) {
-                        return true;
-                    }
-                }
-                false
-            }))
-        }
-        FilterNode::AhoContains { .. } => {
-            // AhoCorasick isn't Clone cheaply — fall back
-            None
-        }
-
-        // ── Logic combinators ──
-        FilterNode::And(a, b) => {
-            let a_fn = compile_closure(a)?;
-            let b_fn = compile_closure(b)?;
-            Some(Box::new(move |ints, strings| a_fn(ints, strings) && b_fn(ints, strings)))
-        }
-        FilterNode::Or(a, b) => {
-            let a_fn = compile_closure(a)?;
-            let b_fn = compile_closure(b)?;
-            Some(Box::new(move |ints, strings| a_fn(ints, strings) || b_fn(ints, strings)))
-        }
-        FilterNode::Not(inner) => {
-            let inner_fn = compile_closure(inner)?;
-            Some(Box::new(move |ints, strings| !inner_fn(ints, strings)))
-        }
-
-        // ── Comprehension: exists() (can't use typed arrays) ──
-        FilterNode::Exists { .. } => None,
-
-        // ── Map-key contains (HashMap lookup, can't use typed arrays) ──
-        FilterNode::MapKeyContains { .. } => None,
-
-        // ── Specialized list membership (scan Value::List, can't use typed arrays) ──
-        FilterNode::ExistsInIntSet { .. } => None,
-        FilterNode::ExistsEqInt { .. } => None,
-        // ── Closure-based exists (predicate is fn(&Value), can't use typed arrays) ──
-        FilterNode::ExistsClosure { .. } => None,
-
-        // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
-        FilterNode::GeExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) >= b(ints, strings)))
-        }
-        FilterNode::GtExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) > b(ints, strings)))
-        }
-        FilterNode::LeExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) <= b(ints, strings)))
-        }
-        FilterNode::LtExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) < b(ints, strings)))
-        }
-        FilterNode::EqExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) == b(ints, strings)))
-        }
-        FilterNode::NeExpr { left, right } => {
-            let a = compile_closure_i64(left)?;
-            let b = compile_closure_i64(right)?;
-            Some(Box::new(move |ints, strings| a(ints, strings) != b(ints, strings)))
-        }
     }
 }
 
@@ -357,10 +40,9 @@ pub fn compile_filter_tree_with_schema(
 ) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::with_schema(field_names, bool_fields);
     let filter = compile_expr(&mut ctx, &expr.expr)?;
-    let fast_eval = compile_closure(&filter);
+    let compiled = filter.compile();
     Ok(CompiledFilterTree {
-        filter,
-        fast_eval,
+        compiled,
         var_names: ctx.var_names,
     })
 }
@@ -368,9 +50,9 @@ pub fn compile_filter_tree_with_schema(
 pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::new();
     let filter = compile_expr(&mut ctx, &expr.expr)?;
+    let compiled = filter.compile();
     Ok(CompiledFilterTree {
-        filter,
-        fast_eval: None,
+        compiled,
         var_names: ctx.var_names,
     })
 }
