@@ -1,13 +1,13 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{CompiledFilterNode, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
+use crate::vm::filter_tree::{CompiledFilterNode, CompiledNode, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
 use crate::objects::Value;
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct CompiledFilterTree {
-    pub compiled: CompiledFilterNode,
+    pub compiled: CompiledNode,
     pub var_names: Vec<String>,
 }
 
@@ -40,7 +40,10 @@ pub fn compile_filter_tree_with_schema(
 ) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::with_schema(field_names, bool_fields);
     let filter = compile_expr(&mut ctx, &expr.expr)?;
-    let compiled = filter.compile();
+    let compiled: CompiledNode = match filter.compile().into_inner() {
+        CompiledNode::Bool(f) => CompiledNode::Bool(f),
+        CompiledNode::Value(f) => CompiledNode::Value(f),
+    };
     Ok(CompiledFilterTree {
         compiled,
         var_names: ctx.var_names,
@@ -50,7 +53,10 @@ pub fn compile_filter_tree_with_schema(
 pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::new();
     let filter = compile_expr(&mut ctx, &expr.expr)?;
-    let compiled = filter.compile();
+    let compiled: CompiledNode = match filter.compile().into_inner() {
+        CompiledNode::Bool(f) => CompiledNode::Bool(f),
+        CompiledNode::Value(f) => CompiledNode::Value(f),
+    };
     Ok(CompiledFilterTree {
         compiled,
         var_names: ctx.var_names,

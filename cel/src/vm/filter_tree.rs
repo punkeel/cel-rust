@@ -56,6 +56,11 @@ impl CompiledFilterNode {
     pub fn eval_bool(&self, vars: &[Value]) -> bool {
         self.0.eval_bool(vars)
     }
+
+    /// Unwrap into the inner CompiledNode.
+    pub fn into_inner(self) -> CompiledNode {
+        self.0
+    }
 }
 
 impl std::fmt::Debug for CompiledFilterNode {

@@ -31,7 +31,8 @@
 
 use crate::objects::Value;
 use crate::vm::compiler::{compile_expression, ValueClosure};
-use crate::vm::filter_tree_compiler::{self, CompiledFilterTree};
+use crate::vm::filter_tree::CompiledNode;
+use crate::vm::filter_tree_compiler::self;
 use crate::{ExecutionError, Expression};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -330,7 +331,7 @@ impl std::fmt::Debug for EvalContext {
 /// automatically falls back to the AST interpreter. This is transparent
 /// to the caller and only ~50× slower (still only ~200 ns).
 pub struct Filter {
-    tree: Option<CompiledFilterTree>,
+    compiled: Option<CompiledNode>,
     var_names: Vec<String>,
     /// Schema field indices for each entry in `var_names`, used by the
     /// AST fallback path to correctly index into `EvalContext.as_slice()`.
@@ -387,6 +388,8 @@ impl Filter {
         )
         .ok();
 
+        let compiled = tree.as_ref().map(|t| t.compiled.clone());
+
         let (var_names, var_indices) = match &tree {
             Some(t) => {
                 // When the tree compiled, var_names are in schema order (0..N).
@@ -414,14 +417,14 @@ impl Filter {
         // Compile a closure for the fallback path. When the filter tree
         // can't handle the expression (e.g. comprehensions, selects),
         // we use this closure instead of walking the AST at eval time.
-        let fallback_closure = if tree.is_none() {
+        let fallback_closure = if compiled.is_none() {
             Some(compile_expression(&expression, &[]))
         } else {
             None
         };
 
         Ok(Filter {
-            tree,
+            compiled,
             var_names,
             var_indices,
             fallback_closure,
@@ -436,7 +439,7 @@ impl Filter {
     /// complexity) — no AST tree-walk at eval time.
     #[inline(always)]
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, ExecutionError> {
-        if self.tree.is_some() {
+        if self.compiled.is_some() {
             Ok(self.eval_bool(ctx))
         } else {
             let closure = self.fallback_closure.as_ref().expect(
@@ -464,8 +467,7 @@ impl Filter {
     /// the filter tree was not compiled (use [`eval`] for fallback).
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        let tree = self.tree.as_ref().unwrap();
-        tree.compiled.eval_bool(ctx.as_slice())
+        self.compiled.as_ref().unwrap().eval_bool(ctx.as_slice())
     }
 
     /// Variable names referenced by this filter, in index order.
@@ -495,7 +497,7 @@ mod tests {
         let filter = Filter::compile("method == 'GET' ? port == 80 : true", &schema).unwrap();
 
         // Verify it indeed fell back (no filter tree compiled).
-        assert!(filter.tree.is_none(), "expected AST fallback for ternary expr");
+        assert!(filter.compiled.is_none(), "expected AST fallback for ternary expr");
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_bool(_flag, false); // flag (index 0) — not referenced
@@ -524,7 +526,7 @@ mod tests {
 
         // Simple comparison — always compiles to a filter tree.
         let filter = Filter::compile("port == 80", &schema).unwrap();
-        assert!(filter.tree.is_some(), "expected filter tree for simple cmp");
+        assert!(filter.compiled.is_some(), "expected filter tree for simple cmp");
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_bool(_flag, false); // flag (index 0)
@@ -553,7 +555,7 @@ mod tests {
         let filter = Filter::from_expression(expression, &schema).unwrap();
 
         // Verify it compiles to a filter tree (BoolVar-enabled fast path)
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(port, 42);
@@ -587,7 +589,7 @@ mod tests {
         let parser = Parser::default();
         let expression = parser.parse("flag_bool && method.startsWith('G')").unwrap();
         let filter = Filter::from_expression(expression, &schema).unwrap();
-        assert!(filter.tree.is_some(), "BoolVar should handle this now");
+        assert!(filter.compiled.is_some(), "BoolVar should handle this now");
 
         // Fallback path test: use an expression with Int != (previously unsupported,
         // but now handled via NeStr). To truly trigger fallback, use something that
@@ -603,7 +605,7 @@ mod tests {
         let expr2: Expression = Parser::default().parse("flag_int && method.startsWith('G')").unwrap();
         let filter2 = Filter::from_expression(expr2, &schema2).unwrap();
         // tree is None because flag_int is Int, not Bool — Ident handler fails
-        assert!(filter2.tree.is_none());
+        assert!(filter2.compiled.is_none());
         // fallback closure should exist
         assert!(filter2.fallback_closure.is_some());
 
@@ -632,7 +634,7 @@ mod tests {
 
         // `port == 443 && method.startsWith('G')` compiles fine to a tree
         let filter = Filter::compile("port == 443 && method.startsWith('G')", &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(_x, 42);
@@ -660,7 +662,7 @@ mod tests {
         // `a && b` — both Bool-typed, compiles via BoolVar
         let expr: Expression = Parser::default().parse("a && b").unwrap();
         let filter = Filter::from_expression(expr, &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(_p, 1);
@@ -690,7 +692,7 @@ mod tests {
         // With BoolVar this compiles to the fast path.
         let expr: Expression = Parser::default().parse("flag").unwrap();
         let filter = Filter::from_expression(expr, &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(skip0, 123);
@@ -710,7 +712,7 @@ mod tests {
         let mut schema = Schema::new();
         let method = schema.add_field("method", FieldType::String);
         let filter = Filter::compile("method != 'GET'", &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_str(method, "POST");
@@ -726,7 +728,7 @@ mod tests {
         let mut schema = Schema::new();
         let flag = schema.add_field("flag", FieldType::Bool);
         let filter = Filter::compile("flag", &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_bool(flag, true);
@@ -743,7 +745,7 @@ mod tests {
         let flag = schema.add_field("flag", FieldType::Bool);
         let port = schema.add_field("port", FieldType::Int);
         let filter = Filter::compile("flag && port == 80", &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_bool(flag, true);
@@ -764,7 +766,7 @@ mod tests {
         let mut schema = Schema::new();
         let flag = schema.add_field("flag", FieldType::Bool);
         let filter = Filter::compile("!flag", &schema).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_bool(flag, true);
@@ -783,7 +785,7 @@ mod tests {
             "bot_ids.exists(id, id > 5)", &schema,
         ).unwrap();
         // Should compile to filter tree via Exists node
-        assert!(filter.tree.is_some(), "exists() should compile to filter tree");
+        assert!(filter.compiled.is_some(), "exists() should compile to filter tree");
 
         let mut ctx = EvalContext::new(&schema);
         // Empty list → false
@@ -815,7 +817,7 @@ mod tests {
         let filter = Filter::compile(
             "bot_ids.exists(id, id == 42)", &schema,
         ).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set(bot_ids, Value::List(Arc::new(vec![
@@ -840,7 +842,7 @@ mod tests {
         let filter = Filter::compile(
             r#"names.exists(n, n == "bob")"#, &schema,
         ).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set(names, Value::List(Arc::new(vec![
@@ -864,7 +866,7 @@ fn filter_eval_exists_in_int_set() {
     let filter = Filter::compile(
         "bot_ids.exists(id, id in [42, 99])", &schema,
     ).unwrap();
-    assert!(filter.tree.is_some());
+    assert!(filter.compiled.is_some());
 
     let mut ctx = EvalContext::new(&schema);
     ctx.set(bot_ids, Value::List(Arc::new(vec![
@@ -890,7 +892,7 @@ fn filter_eval_exists_eq_int_node() {
     let filter = Filter::compile(
         "bot_ids.exists(id, id == 42)", &schema,
     ).unwrap();
-    assert!(filter.tree.is_some());
+    assert!(filter.compiled.is_some());
 
     let mut ctx = EvalContext::new(&schema);
     ctx.set(bot_ids, Value::List(Arc::new(vec![
@@ -915,7 +917,7 @@ fn filter_eval_exists_eq_int_node() {
             r#"http__headers_map["via"].exists(it, it == "X-MSIP-Via")"#,
             &schema,
         ).unwrap();
-        assert!(filter.tree.is_some());
+        assert!(filter.compiled.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         use std::collections::HashMap;
