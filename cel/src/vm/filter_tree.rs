@@ -43,6 +43,39 @@ impl I64Expr {
             Self::ListLen(a) => a.len(vars) as i64,
         }
     }
+
+    /// Fast eval — no bounds checks or type checks.
+    ///
+    /// # Safety
+    ///
+    /// Same safety guarantees as [`FilterNode::eval_fast`].
+    #[inline(always)]
+    pub unsafe fn eval_fast(&self, vars: &[Value]) -> i64 {
+        match self {
+            Self::Literal(v) => *v,
+            Self::Var(idx) => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::Add(a, b) => a.eval_fast(vars).wrapping_add(b.eval_fast(vars)),
+            Self::Sub(a, b) => a.eval_fast(vars).wrapping_sub(b.eval_fast(vars)),
+            Self::Mul(a, b) => a.eval_fast(vars).wrapping_mul(b.eval_fast(vars)),
+            Self::Div(a, b) => {
+                let bv = b.eval_fast(vars);
+                if bv == 0 { 0 } else { a.eval_fast(vars).wrapping_div(bv) }
+            }
+            Self::Mod(a, b) => {
+                let bv = b.eval_fast(vars);
+                if bv == 0 { 0 } else { a.eval_fast(vars).wrapping_rem(bv) }
+            }
+            Self::Neg(a) => a.eval_fast(vars).wrapping_neg(),
+            Self::StrLen(a) => a.len_unchecked(vars) as i64,
+            Self::ListLen(a) => a.len_unchecked(vars) as i64,
+        }
+    }
 }
 
 /// A typed string expression that evaluates directly to `&str` (via reference to var storage).
@@ -98,6 +131,26 @@ impl StrExpr {
             Self::Concat(a, b) => a.len(vars) + b.len(vars),
         }
     }
+
+    /// Fast length — no bounds checks or type checks.
+    ///
+    /// # Safety
+    ///
+    /// Same safety guarantees as [`FilterNode::eval_fast`].
+    #[inline(always)]
+    pub unsafe fn len_unchecked(&self, vars: &[Value]) -> usize {
+        match self {
+            Self::Literal(s) => s.len(),
+            Self::Var(idx) => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => s.len(),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::Concat(a, b) => a.len_unchecked(vars) + b.len_unchecked(vars),
+        }
+    }
 }
 
 /// A typed list expression.
@@ -120,6 +173,24 @@ impl ListExpr {
     #[inline(always)]
     pub fn len(&self, vars: &[Value]) -> usize {
         self.eval(vars).map_or(0, |list| list.len())
+    }
+
+    /// Fast length — no bounds checks or type checks.
+    ///
+    /// # Safety
+    ///
+    /// Same safety guarantees as [`FilterNode::eval_fast`].
+    #[inline(always)]
+    pub unsafe fn len_unchecked(&self, vars: &[Value]) -> usize {
+        match self {
+            Self::Var(idx) => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::List(list) => list.len(),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+        }
     }
 }
 
@@ -403,6 +474,311 @@ impl FilterNode {
             Self::And(a, b) => a.eval(vars) && b.eval(vars),
             Self::Or(a, b) => a.eval(vars) || b.eval(vars),
             Self::Not(inner) => !inner.eval(vars),
+        }
+    }
+
+    /// Evaluate without bounds checks or type checks.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee:
+    /// - Every `idx` in this tree is `< vars.len()`
+    /// - Every field access matches the expected `Value` variant
+    ///   (e.g. `EqInt` only encounters `Value::Int` at its index)
+    ///
+    /// These are guaranteed when the tree was compiled against a [`Schema`](crate::fast::Schema)
+    /// and all fields have been set to the correct types.
+    #[inline(always)]
+    pub unsafe fn eval_fast(&self, vars: &[Value]) -> bool {
+        match self {
+            // ── Int comparisons ──
+            Self::EqInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i == *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::NeInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i != *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::LtInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i < *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::LeInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i <= *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::GtInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i > *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::GeInt { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => *i >= *val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── Fused arithmetic + comparison ──
+            Self::AddEq { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) == *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AddNe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) != *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AddLt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) < *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AddLe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) <= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AddGt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) > *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AddGe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_add(*arith) >= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubEq { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) == *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubNe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) != *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubLt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) < *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubLe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) <= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubGt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) > *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::SubGe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_sub(*arith) >= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulEq { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) == *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulNe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) != *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulLt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) < *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulLe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) <= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulGt { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) > *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MulGe { idx, arith, cmp } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => i.wrapping_mul(*arith) >= *cmp,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── String comparison ──
+            Self::EqStr { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => &**s == val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── Set membership: int ──
+            Self::InIntLinear { idx, vals } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => vals.contains(i),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::InIntHash { idx, set } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Int(i) => set.contains(i),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── Set membership: str ──
+            Self::InStrLinear { idx, vals } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => vals.iter().any(|v| s.as_ref() == v),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::InStrHash { idx, set } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => set.contains(s.as_ref()),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── String methods ──
+            Self::StartsWith { idx, prefix } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => s.starts_with(prefix.as_str()),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::EndsWith { idx, suffix } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => s.ends_with(suffix.as_str()),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::Contains { idx, substring } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => s.contains(substring.as_str()),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── Multi-pattern contains ──
+            Self::ContainsAny { idx, needles } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => {
+                        let text: &str = &**s;
+                        for needle in needles {
+                            if text.contains(needle.as_str()) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::AhoContains { idx, ac, min } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => {
+                        let text = s.as_bytes();
+                        if *min <= 1 {
+                            return ac.is_match(text);
+                        }
+                        let mut matched = 0u64;
+                        for mat in ac.find_iter(text) {
+                            let pid = mat.pattern().as_u64();
+                            if pid < 64 {
+                                matched |= 1u64 << pid;
+                                if matched.count_ones() as usize >= *min {
+                                    return true;
+                                }
+                            }
+                        }
+                        false
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── I64Expr comparisons ──
+            Self::GeExpr { left, right } => left.eval_fast(vars) >= right.eval_fast(vars),
+            Self::GtExpr { left, right } => left.eval_fast(vars) > right.eval_fast(vars),
+            Self::LeExpr { left, right } => left.eval_fast(vars) <= right.eval_fast(vars),
+            Self::LtExpr { left, right } => left.eval_fast(vars) < right.eval_fast(vars),
+            Self::EqExpr { left, right } => left.eval_fast(vars) == right.eval_fast(vars),
+            Self::NeExpr { left, right } => left.eval_fast(vars) != right.eval_fast(vars),
+
+            // ── Logic combinators (recursively call eval_fast) ──
+            Self::And(a, b) => a.eval_fast(vars) && b.eval_fast(vars),
+            Self::Or(a, b) => a.eval_fast(vars) || b.eval_fast(vars),
+            Self::Not(inner) => !inner.eval_fast(vars),
         }
     }
 }

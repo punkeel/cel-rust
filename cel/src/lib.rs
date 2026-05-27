@@ -198,7 +198,8 @@ impl Program {
     pub fn execute_fast(&self, context: &Context) -> ResolveResult {
         if let Ok(compiled) = vm::compile_filter_tree(&self.expression) {
             let vars = compiled.bind_vars(context);
-            Ok(Value::Bool(compiled.filter.eval(&vars)))
+            // Safety: bind_vars extracts values from the context with correct types.
+            Ok(Value::Bool(unsafe { compiled.filter.eval_fast(&vars) }))
         } else {
             self.execute(context)
         }

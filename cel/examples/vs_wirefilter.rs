@@ -63,7 +63,7 @@ fn main() {
     let t1_tree = {
         let v = vec![Value::Int(80)];
         let f: Box<FilterNode> = Box::new(FilterNode::EqInt { idx: 0, val: 80 });
-        median_ns("port == 80", "Tree", || { std::hint::black_box(f.eval(&v)); })
+        median_ns("port == 80", "Tree", || { std::hint::black_box(unsafe { f.eval_fast(&v) }); })
     };
 
     // cel::fast — eval only (set once, like wirefilter)
@@ -106,7 +106,7 @@ fn main() {
     let t2_tree = {
         let v = vec![Value::String(Arc::from("GET"))];
         let f: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 0, val: "GET".to_string() });
-        median_ns("method == GET", "Tree", || { std::hint::black_box(f.eval(&v)); })
+        median_ns("method == GET", "Tree", || {            std::hint::black_box(unsafe { f.eval_fast(&v) });})
     };
 
     let t2_fast_eval = {
@@ -150,7 +150,7 @@ fn main() {
             Box::new(FilterNode::GeInt { idx: 0, val: 1024 }),
             Box::new(FilterNode::LtInt { idx: 0, val: 65535 }),
         ));
-        median_ns("port range", "Tree", || { std::hint::black_box(f.eval(&v)); })
+        median_ns("port range", "Tree", || {            std::hint::black_box(unsafe { f.eval_fast(&v) });})
     };
 
     let t3_fast_eval = {
@@ -194,7 +194,7 @@ fn main() {
             idx: 0,
             vals: vec![80, 443, 8080, 3000],
         });
-        median_ns("port IN set", "Tree", || { std::hint::black_box(f.eval(&v)); })
+        median_ns("port IN set", "Tree", || {            std::hint::black_box(unsafe { f.eval_fast(&v) });})
     };
 
     let t4_fast_eval = {
@@ -240,7 +240,7 @@ fn main() {
         let a: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 0, val: "GET".to_string() });
         let b: Box<FilterNode> = Box::new(FilterNode::EqStr { idx: 1, val: "/api".to_string() });
         let f: Box<FilterNode> = Box::new(FilterNode::And(a, b));
-        median_ns("multi-field", "Tree", || { std::hint::black_box(f.eval(&v)); })
+        median_ns("multi-field", "Tree", || {            std::hint::black_box(unsafe { f.eval_fast(&v) });})
     };
 
     let t5_fast_eval = {

@@ -376,7 +376,9 @@ impl Filter {
     /// the filter tree was not compiled (use [`eval`] for fallback).
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        self.tree.as_ref().unwrap().filter.eval(ctx.as_slice())
+        // Safety: Schema guarantees all field indices are in-bounds
+        // and all value types match the expected variants.
+        unsafe { self.tree.as_ref().unwrap().filter.eval_fast(ctx.as_slice()) }
     }
 
     /// Variable names referenced by this filter, in index order.
