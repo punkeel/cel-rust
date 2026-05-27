@@ -578,8 +578,8 @@ mod tests {
         // are correctly resolved for string-typed variables when the
         // filter tree can't compile the expression.
         let mut schema = Schema::new();
-        let x = schema.add_field("x", FieldType::Int);     // idx 0
-        let method = schema.add_field("method", FieldType::String); // idx 1
+        let _x = schema.add_field("x", FieldType::Int);     // idx 0
+        let _method = schema.add_field("method", FieldType::String); // idx 1
         let _flag_bool = schema.add_field("flag_bool", FieldType::Bool); // idx 2
 
         // Expression that fails filter tree compile because `flag_bool` is an Ident
@@ -626,7 +626,7 @@ mod tests {
         // Fast path should also work when schema order differs from
         // expression order — uses direct field indices, no zip involved.
         let mut schema = Schema::new();
-        let x = schema.add_field("x", FieldType::Int);     // idx 0
+        let _x = schema.add_field("x", FieldType::Int);     // idx 0
         let method = schema.add_field("method", FieldType::String); // idx 1
         let port = schema.add_field("port", FieldType::Int);  // idx 2
 
@@ -635,7 +635,7 @@ mod tests {
         assert!(filter.tree.is_some());
 
         let mut ctx = EvalContext::new(&schema);
-        ctx.set_i64(x, 42);
+        ctx.set_i64(_x, 42);
         ctx.set_str(method, "GET");
         ctx.set_i64(port, 443);
 
