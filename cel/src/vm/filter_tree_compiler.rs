@@ -145,7 +145,7 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
             let v = vals.clone();
             Some(Box::new(move |ints, _| v.contains(&ints[i])))
         }
-        FilterNode::InIntHash { idx, set } => {
+        FilterNode::InIntHash { .. } => {
             // Can't clone a HashSet cheaply — fall back
             None
         }
@@ -192,9 +192,7 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
                 false
             }))
         }
-        FilterNode::AhoContains { idx, ac, min } => {
-            let i = *idx;
-            let m = *min;
+        FilterNode::AhoContains { .. } => {
             // AhoCorasick isn't Clone cheaply — fall back
             None
         }

@@ -426,7 +426,7 @@ impl Filter {
             if let Some(fast) = &tree.fast_eval {
                 fast(ctx.ints(), ctx.strings())
             } else {
-                tree.filter.eval_fast_typed(ctx.ints(), ctx.strings())
+                tree.filter.eval_fast(ctx.as_slice())
             }
         }
     }
