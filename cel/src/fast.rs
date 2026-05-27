@@ -344,12 +344,16 @@ pub struct Filter {
     tree: Option<CompiledFilterTree>,
     expression: Expression,
     var_names: Vec<String>,
+    /// Schema field index for each variable in `var_names`.
+    /// Used by the AST fallback path to correctly index into `EvalContext.as_slice()`.
+    var_indices: Vec<usize>,
 }
 
 impl std::fmt::Debug for Filter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Filter")
             .field("var_names", &self.var_names)
+            .field("var_indices", &self.var_indices)
             .finish()
     }
 }
@@ -374,20 +378,35 @@ impl Filter {
         )
         .ok();
 
-        let var_names = match &tree {
-            Some(t) => t.var_names.clone(),
-            None => expression
-                .references()
-                .variables()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
+        let (var_names, var_indices) = match &tree {
+            Some(t) => {
+                // When the tree compiled, var_names are in schema order (0..N).
+                let indices: Vec<usize> = (0..t.var_names.len()).collect();
+                (t.var_names.clone(), indices)
+            }
+            None => {
+                let names: Vec<String> = expression
+                    .references()
+                    .variables()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                // Resolve each name through the schema to get its field index.
+                // This is essential for the AST fallback path to correctly
+                // index into EvalContext.as_slice().
+                let indices: Vec<usize> = names
+                    .iter()
+                    .map(|n| schema.get_field(n).map(|f| f.index()).unwrap_or(0))
+                    .collect();
+                (names, indices)
+            }
         };
 
         Ok(Filter {
             tree,
             expression,
             var_names,
+            var_indices,
         })
     }
 
@@ -402,8 +421,8 @@ impl Filter {
             Ok(self.eval_bool(ctx))
         } else {
             let mut map_ctx = crate::Context::default();
-            for (name, val) in self.var_names.iter().zip(ctx.as_slice().iter()) {
-                map_ctx.add_variable_from_value(name, val.clone());
+            for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
+                map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
             }
             match Value::resolve(&self.expression, &map_ctx) {
                 Ok(Value::Bool(b)) => Ok(b),
@@ -435,5 +454,63 @@ impl Filter {
     /// Matches the schema indices used during compilation.
     pub fn variables(&self) -> &[String] {
         &self.var_names
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The AST fallback path in Filter::eval() was incorrectly zipping
+    /// expression-order variable names with schema-order values, causing
+    /// field/value mismatches when the expression referenced fields out of
+    /// schema order.
+    #[test]
+    fn test_eval_ast_fallback_respects_schema_indices() {
+        let mut schema = Schema::new();
+        let _flag = schema.add_field("flag", FieldType::Bool);
+        let port = schema.add_field("port", FieldType::Int);
+        let method = schema.add_field("method", FieldType::String);
+
+        // Ternary is not supported by the filter tree compiler, forcing AST fallback.
+        let filter = Filter::compile("method == 'GET' ? port == 80 : true", &schema).unwrap();
+
+        // Verify it indeed fell back (no filter tree compiled).
+        assert!(filter.tree.is_none(), "expected AST fallback for ternary expr");
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_bool(_flag, false); // flag (index 0) — not referenced
+        ctx.set_i64(port, 80);    // port (index 1)
+        ctx.set_str(method, "GET"); // method (index 2)
+
+        // method == "GET" → true → evaluate `port == 80` → true
+        assert_eq!(filter.eval(&ctx).unwrap(), true);
+
+        // Change port so the result should be false
+        ctx.set_i64(port, 8080);
+        assert_eq!(filter.eval(&ctx).unwrap(), false);
+
+        // Change method so the ternary takes the else branch → true
+        ctx.set_i64(port, 80);
+        ctx.set_str(method, "POST");
+        assert_eq!(filter.eval(&ctx).unwrap(), true);
+    }
+
+    /// The tree path should still work correctly regardless of field order.
+    #[test]
+    fn test_eval_tree_path_respects_schema_indices() {
+        let mut schema = Schema::new();
+        let _flag = schema.add_field("flag", FieldType::Bool);
+        let port = schema.add_field("port", FieldType::Int);
+
+        // Simple comparison — always compiles to a filter tree.
+        let filter = Filter::compile("port == 80", &schema).unwrap();
+        assert!(filter.tree.is_some(), "expected filter tree for simple cmp");
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_bool(_flag, false); // flag (index 0)
+        ctx.set_i64(port, 80);   // port (index 1)
+
+        assert_eq!(filter.eval(&ctx).unwrap(), true);
     }
 }
