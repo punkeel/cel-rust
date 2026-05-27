@@ -244,6 +244,12 @@ pub enum FilterNode {
 
     // --- String comparison ---
     EqStr { idx: usize, val: String },
+    /// String != comparison.
+    NeStr { idx: usize, val: String },
+
+    // --- Boolean field predicates ---
+    /// Bare boolean variable used as condition (e.g. `flag && ...`).
+    BoolVar { idx: usize },
 
     // --- Set membership: int ---
     InIntLinear { idx: usize, vals: Vec<i64> },
@@ -393,6 +399,16 @@ impl FilterNode {
             // ── String comparison ──
             Self::EqStr { idx, val } => match &vars[*idx] {
                 Value::String(s) => &**s == val,
+                _ => false,
+            },
+            Self::NeStr { idx, val } => match &vars[*idx] {
+                Value::String(s) => &**s != val,
+                _ => false,
+            },
+
+            // ── Boolean field predicates ──
+            Self::BoolVar { idx } => match &vars[*idx] {
+                Value::Bool(b) => *b,
                 _ => false,
             },
 
@@ -677,6 +693,22 @@ impl FilterNode {
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
+            Self::NeStr { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => &**s != val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+
+            // ── Boolean field predicates ──
+            Self::BoolVar { idx } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::Bool(b) => *b,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
 
             // ── Set membership: int ──
             Self::InIntLinear { idx, vals } => {
@@ -874,6 +906,10 @@ impl FilterNode {
 
             // ── String comparison (direct Arc<str> access) ──
             Self::EqStr { idx, val } => strings.get_unchecked(*idx).as_ref() == val.as_str(),
+            Self::NeStr { idx, val } => strings.get_unchecked(*idx).as_ref() != val.as_str(),
+
+            // ── Boolean field predicates (fall back to vars) ──
+            Self::BoolVar { .. } => core::hint::unreachable_unchecked(),
 
             // ── Set membership: int ──
             Self::InIntLinear { idx, vals } => vals.contains(ints.get_unchecked(*idx)),

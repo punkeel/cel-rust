@@ -378,9 +378,19 @@ impl Filter {
     /// Create a Filter from a pre-parsed Expression.
     pub fn from_expression(expression: Expression, schema: &Schema) -> Result<Self, String> {
         let field_names: Vec<&str> = schema.field_names();
+
+        // Collect boolean field names so the filter tree compiler can
+        // compile bare Ident references for boolean-typed fields.
+        let bool_fields: std::collections::HashSet<String> = schema
+            .fields()
+            .filter(|(_, ty)| *ty == FieldType::Bool)
+            .map(|(name, _)| name.to_string())
+            .collect();
+
         let tree = filter_tree_compiler::compile_filter_tree_with_schema(
             &expression,
             &field_names,
+            &bool_fields,
         )
         .ok();
 
@@ -538,15 +548,14 @@ mod tests {
         let b = schema.add_field("b", FieldType::Int);       // idx 2
         let _c = schema.add_field("c", FieldType::String);    // idx 3
 
-        // Parse `a && b == 7`. The bare `a` (Expr::Ident) causes
-        // filter tree compilation to fail — compile_expr only handles
-        // Expr::Call. This forces the AST fallback path.
+        // Parse `a && b == 7`. With BoolVar support, this now compiles
+        // to the fast path: And(BoolVar { a }, EqInt { b, 7 }).
         let parser = Parser::default();
         let expression = parser.parse("a && b == 7").unwrap();
         let filter = Filter::from_expression(expression, &schema).unwrap();
 
-        // Verify fallback is active (tree is None)
-        assert!(filter.tree.is_none());
+        // Verify it compiles to a filter tree (BoolVar-enabled fast path)
+        assert!(filter.tree.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(port, 42);
@@ -554,7 +563,7 @@ mod tests {
         ctx.set_i64(b, 7);
         ctx.set_str(_c, "test");
 
-        // With fix: a → ctx[1] = true, b → ctx[2] = 7
+        // a → ctx[1] = true, b → ctx[2] = 7
         // → true && (7 == 7) = true
         let result = filter.eval(&ctx);
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
@@ -633,10 +642,10 @@ mod tests {
         let b = schema.add_field("b", FieldType::Bool);  // idx 3
         let _r = schema.add_field("r", FieldType::Int);    // idx 4
 
-        // `a && b` — both bare Expr::Idents, fallback triggered
+        // `a && b` — both Bool-typed, compiles via BoolVar
         let expr: Expression = Parser::default().parse("a && b").unwrap();
         let filter = Filter::from_expression(expr, &schema).unwrap();
-        assert!(filter.tree.is_none());
+        assert!(filter.tree.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(_p, 1);
@@ -662,11 +671,11 @@ mod tests {
         let skip1 = schema.add_field("skip1", FieldType::String); // idx 1
         let flag = schema.add_field("flag", FieldType::Bool);    // idx 2
 
-        // Expression uses only `flag` — should map to index 2 even
-        // though it's the only variable reference.
+        // Expression uses only `flag` — should map to index 2.
+        // With BoolVar this compiles to the fast path.
         let expr: Expression = Parser::default().parse("flag").unwrap();
         let filter = Filter::from_expression(expr, &schema).unwrap();
-        assert!(filter.tree.is_none());
+        assert!(filter.tree.is_some());
 
         let mut ctx = EvalContext::new(&schema);
         ctx.set_i64(skip0, 123);
@@ -678,5 +687,75 @@ mod tests {
 
         ctx.set_bool(flag, false);
         assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_string_ne() {
+        // String != should compile to the fast path via NeStr
+        let mut schema = Schema::new();
+        let method = schema.add_field("method", FieldType::String);
+        let filter = Filter::compile("method != 'GET'", &schema).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_str(method, "POST");
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set_str(method, "GET");
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_bool_var_predicate() {
+        // Boolean field used directly as a predicate (no `== true`)
+        let mut schema = Schema::new();
+        let flag = schema.add_field("flag", FieldType::Bool);
+        let filter = Filter::compile("flag", &schema).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_bool(flag, true);
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set_bool(flag, false);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_bool_var_in_and() {
+        // BoolVar combined with another condition
+        let mut schema = Schema::new();
+        let flag = schema.add_field("flag", FieldType::Bool);
+        let port = schema.add_field("port", FieldType::Int);
+        let filter = Filter::compile("flag && port == 80", &schema).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_bool(flag, true);
+        ctx.set_i64(port, 80);
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set_bool(flag, false);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+
+        ctx.set_bool(flag, true);
+        ctx.set_i64(port, 8080);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_bool_var_not() {
+        // !flag should also compile
+        let mut schema = Schema::new();
+        let flag = schema.add_field("flag", FieldType::Bool);
+        let filter = Filter::compile("!flag", &schema).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_bool(flag, true);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+
+        ctx.set_bool(flag, false);
+        assert_eq!(filter.eval(&ctx), Ok(true));
     }
 }

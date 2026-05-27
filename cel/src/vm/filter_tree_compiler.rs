@@ -2,7 +2,7 @@ use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
 use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
 use crate::Expression;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct CompiledFilterTree {
@@ -201,10 +201,20 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
         FilterNode::EqStr { idx, val } => {
             let i = *idx;
             let v: Arc<str> = Arc::from(val.as_str());
-            Some(Box::new(move |_, strings| strings[i].as_ref() == v.as_ref()))
+            Some(Box::new(move |_, strings| {
+                strings[i].as_ref() == v.as_ref()
+            }))
+        }
+        FilterNode::NeStr { idx, val } => {
+            let i = *idx;
+            let v: Arc<str> = Arc::from(val.as_str());
+            Some(Box::new(move |_, strings| {
+                strings[i].as_ref() != v.as_ref()
+            }))
         }
 
-        // ── Set membership: int ──
+        // ── Boolean field predicates (can't use typed arrays) ──
+        FilterNode::BoolVar { .. } => None,
         FilterNode::InIntLinear { idx, vals } => {
             let i = *idx;
             let v = vals.clone();
@@ -330,8 +340,9 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
 pub fn compile_filter_tree_with_schema(
     expr: &Expression,
     field_names: &[&str],
+    bool_fields: &HashSet<String>,
 ) -> Result<CompiledFilterTree, String> {
-    let mut ctx = FilterCtx::with_schema(field_names);
+    let mut ctx = FilterCtx::with_schema(field_names, bool_fields);
     let filter = compile_expr(&mut ctx, &expr.expr)?;
     let fast_eval = compile_closure(&filter);
     Ok(CompiledFilterTree {
@@ -354,6 +365,7 @@ pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, Stri
 struct FilterCtx {
     var_map: HashMap<String, usize>,
     var_names: Vec<String>,
+    bool_fields: HashSet<String>,
 }
 
 impl FilterCtx {
@@ -361,19 +373,24 @@ impl FilterCtx {
         Self {
             var_map: HashMap::new(),
             var_names: Vec::new(),
+            bool_fields: HashSet::new(),
         }
     }
 
     /// Create a context pre-populated with schema field names.
     /// The field_names Vec provides the name → index mapping.
-    fn with_schema(field_names: &[&str]) -> Self {
+    fn with_schema(field_names: &[&str], bool_fields: &HashSet<String>) -> Self {
         let mut var_map = HashMap::with_capacity(field_names.len());
         let mut var_names = Vec::with_capacity(field_names.len());
         for (idx, name) in field_names.iter().enumerate() {
             var_map.insert((*name).to_string(), idx);
             var_names.push((*name).to_string());
         }
-        Self { var_map, var_names }
+        Self {
+            var_map,
+            var_names,
+            bool_fields: bool_fields.clone(),
+        }
     }
 
     fn var_idx(&mut self, name: &str) -> usize {
@@ -453,6 +470,14 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
             }
 
             Err(format!("unsupported filter expr: {}", name))
+        }
+        Expr::Ident(name) => {
+            // Boolean-typed fields can be used directly as predicates.
+            if ctx.bool_fields.contains(name.as_str()) {
+                let idx = ctx.var_idx(name);
+                return Ok(Box::new(FilterNode::BoolVar { idx }));
+            }
+            Err("unsupported expr kind in filter tree".into())
         }
         _ => Err("unsupported expr kind in filter tree".into()),
     }
@@ -809,11 +834,12 @@ fn try_compile_str_cmp(
         }
         _ => return None,
     };
-    if op != operators::EQUALS {
-        return None;
-    }
     let idx = ctx.var_idx(var_name);
-    Some(Box::new(FilterNode::EqStr { idx, val }))
+    match op {
+        operators::EQUALS => Some(Box::new(FilterNode::EqStr { idx, val })),
+        operators::NOT_EQUALS => Some(Box::new(FilterNode::NeStr { idx, val })),
+        _ => None,
+    }
 }
 
 fn try_compile_str_bool(
