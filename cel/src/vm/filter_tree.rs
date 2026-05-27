@@ -296,6 +296,16 @@ pub enum FilterNode {
         item_idx: usize,
         predicate: Box<FilterNode>,
     },
+
+    // --- Map-key contains (map["key"].exists(x, x == "val")) ---
+    /// Optimized path for `map["key"].exists(x, x == "value")`.
+    /// No allocation, no iteration — just a HashMap lookup + comparison.
+    /// Handles both single-string and list-of-strings values.
+    MapKeyContains {
+        map_idx: usize,
+        key: String,
+        needle: String,
+    },
 }
 
 impl FilterNode {
@@ -520,6 +530,23 @@ impl FilterNode {
                             }
                         }
                         false
+                    }
+                    _ => false,
+                }
+            }
+
+            // ── Map-key contains (single lookup, no alloc) ──
+            Self::MapKeyContains { map_idx, key, needle } => {
+                match &vars[*map_idx] {
+                    Value::Map(m) => {
+                        let k = crate::objects::Key::String(std::sync::Arc::from(key.as_str()));
+                        match m.map.get(&k) {
+                            Some(Value::String(s)) => s.as_ref() == needle.as_str(),
+                            Some(Value::List(list)) => {
+                                list.iter().any(|v| matches!(v, Value::String(s) if s.as_ref() == needle.as_str()))
+                            }
+                            _ => false,
+                        }
                     }
                     _ => false,
                 }
@@ -871,8 +898,26 @@ impl FilterNode {
                     _ => false,
                 }
             }
+
+            // ── Map-key contains (single lookup, no alloc) ──
+            Self::MapKeyContains { map_idx, key, needle } => {
+                let v = vars.get_unchecked(*map_idx);
+                match v {
+                    Value::Map(m) => {
+                        let k = crate::objects::Key::String(std::sync::Arc::from(key.as_str()));
+                        match m.map.get(&k) {
+                            Some(Value::String(s)) => s.as_ref() == needle.as_str(),
+                            Some(Value::List(list)) => {
+                                list.iter().any(|v| matches!(v, Value::String(s) if s.as_ref() == needle.as_str()))
+                            }
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            }
         }
-    }
 
     /// Evaluate using pre-extracted typed arrays — no Value enum access.
     ///
@@ -1033,6 +1078,7 @@ impl FilterNode {
 
             // ── Comprehension: exists() (can't extend typed arrays) ──
             Self::Exists { .. } => core::hint::unreachable_unchecked(),
+            Self::MapKeyContains { .. } => core::hint::unreachable_unchecked(),
         }
     }
 }

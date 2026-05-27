@@ -877,3 +877,49 @@ mod tests {
         assert_eq!(filter.eval(&ctx), Ok(false));
     }
 }
+
+    #[test]
+    fn filter_eval_map_key_contains() {
+        let mut schema = Schema::new();
+        let hdrs = schema.add_field("http__headers_map", FieldType::Any);
+        let filter = Filter::compile(
+            r#"http__headers_map["via"].exists(it, it == "X-MSIP-Via")"#,
+            &schema,
+        ).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        use std::collections::HashMap;
+
+        // Single string value, matching
+        {
+            let mut map = HashMap::new();
+            map.insert(crate::objects::Key::String(Arc::from("via")),
+                Value::String(Arc::from("X-MSIP-Via")));
+            ctx.set(hdrs, Value::Map(crate::objects::Map { map: Arc::new(map) }));
+            assert_eq!(filter.eval(&ctx), Ok(true));
+        }
+
+        // List value with matching element
+        {
+            let mut map = HashMap::new();
+            map.insert(crate::objects::Key::String(Arc::from("via")),
+                Value::List(Arc::new(vec![
+                    Value::String(Arc::from("X-Forwarded-For")),
+                    Value::String(Arc::from("X-MSIP-Via")),
+                ])));
+            ctx.set(hdrs, Value::Map(crate::objects::Map { map: Arc::new(map) }));
+            assert_eq!(filter.eval(&ctx), Ok(true));
+        }
+
+        // Non-matching
+        {
+            let mut map = HashMap::new();
+            map.insert(crate::objects::Key::String(Arc::from("via")),
+                Value::List(Arc::new(vec![
+                    Value::String(Arc::from("X-Forwarded-For")),
+                ])));
+            ctx.set(hdrs, Value::Map(crate::objects::Map { map: Arc::new(map) }));
+            assert_eq!(filter.eval(&ctx), Ok(false));
+        }
+    }

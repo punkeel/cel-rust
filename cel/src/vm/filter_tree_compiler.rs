@@ -301,6 +301,9 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
         // ── Comprehension: exists() (can't use typed arrays) ──
         FilterNode::Exists { .. } => None,
 
+        // ── Map-key contains (HashMap lookup, can't use typed arrays) ──
+        FilterNode::MapKeyContains { .. } => None,
+
         // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
         FilterNode::GeExpr { left, right } => {
             let a = compile_closure_i64(left)?;
@@ -486,6 +489,13 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
                 return Err("unsupported comprehension pattern".into());
             }
 
+            // Detect map["key"].exists(x, x == "val") — single lookup, no alloc
+            // iter_range must be _[_](map, "literal_key")
+            // predicate must be x == "literal_val" or "literal_val" == x
+            if let Some(f) = try_compile_map_key_exists(ctx, comp) {
+                return Ok(f);
+            }
+
             // Extract the list variable from iter_range
             let list_name = match &comp.iter_range.expr {
                 Expr::Ident(name) => name.clone(),
@@ -511,7 +521,11 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
                 _ => return Err("unsupported exists() pattern".into()),
             };
 
-            Ok(Box::new(FilterNode::Exists { list_idx, item_idx, predicate }))
+            Ok(Box::new(FilterNode::Exists {
+                list_idx,
+                item_idx,
+                predicate,
+            }))
         }
         Expr::Ident(name) => {
             // Boolean-typed fields can be used directly as predicates.
@@ -523,6 +537,69 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
         }
         _ => Err("unsupported expr kind in filter tree".into()),
     }
+}
+
+/// Try to compile `map["key"].exists(x, x == "value")` as a single
+/// `MapKeyContains` node — no Vec allocation, no per-item iteration.
+fn try_compile_map_key_exists(
+    ctx: &mut FilterCtx,
+    comp: &crate::common::ast::ComprehensionExpr,
+) -> Option<Box<FilterNode>> {
+    // iter_range must be _[_](map, "literal_key")
+    let (map_name, map_key) = match &comp.iter_range.expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::INDEX
+            && call.args.len() >= 1 =>
+        {
+            let map_name = match &call.args[0].expr {
+                Expr::Ident(name) => name.clone(),
+                _ => return None,
+            };
+            let map_key = match call.args.get(1).map(|a| &a.expr) {
+                Some(Expr::Literal(LiteralValue::String(s))) => s.inner().to_string(),
+                _ => return None, // non-literal key
+            };
+            (map_name, map_key)
+        }
+        _ => return None,
+    };
+
+    // Predicate must be x == "value" or "value" == x (inside @result || predicate)
+    let pred = match &comp.loop_step.expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR
+            && call.args.len() == 2 =>
+        {
+            match &call.args[0].expr {
+                Expr::Ident(name) if name == "@result" => &call.args[1].expr,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    // Extract needle from the equality check
+    let needle = match pred {
+        Expr::Call(call) if call.func_name.as_str() == operators::EQUALS
+            && call.args.len() == 2 =>
+        {
+            let ident_name = comp.iter_var.as_str();
+            // Match either: x == "val" or "val" == x
+            match (&call.args[0].expr, &call.args[1].expr) {
+                (Expr::Ident(name), Expr::Literal(LiteralValue::String(s)))
+                    if name == ident_name => s.inner().to_string(),
+                (Expr::Literal(LiteralValue::String(s)), Expr::Ident(name))
+                    if name == ident_name => s.inner().to_string(),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    let map_idx = ctx.var_idx(&map_name);
+    Some(Box::new(FilterNode::MapKeyContains {
+        map_idx,
+        key: map_key,
+        needle,
+    }))
 }
 
 /// Try to compile a pure OR-tree of `.contains(literal)` into a single AC scan.
