@@ -465,7 +465,7 @@ impl Filter {
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
         let tree = self.tree.as_ref().unwrap();
-        matches!(tree.compiled.eval(ctx.as_slice()), Value::Bool(true))
+        tree.compiled.eval_bool(ctx.as_slice())
     }
 
     /// Variable names referenced by this filter, in index order.

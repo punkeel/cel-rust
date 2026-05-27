@@ -13,7 +13,7 @@ pub struct CompiledFilterTree {
 
 impl CompiledFilterTree {
     pub fn eval(&self, vars: &[crate::objects::Value]) -> bool {
-        matches!(self.compiled.eval(vars), Value::Bool(true))
+        self.compiled.eval_bool(vars)
     }
 
     pub fn bind_vars(&self, ctx: &crate::Context) -> Vec<crate::objects::Value> {
