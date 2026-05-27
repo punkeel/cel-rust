@@ -30,6 +30,7 @@
 //! without deallocating the backing array.
 
 use crate::objects::Value;
+use crate::vm::compiler::{compile_expression, ValueClosure};
 use crate::vm::filter_tree_compiler::{self, CompiledFilterTree};
 use crate::{ExecutionError, Expression};
 use std::collections::HashMap;
@@ -353,6 +354,11 @@ pub struct Filter {
     /// [`Filter::eval`] can index into [`EvalContext`] by field rather
     /// than zipping names with schema order.
     var_indices: Vec<usize>,
+    /// Pre-compiled closure for expressions that couldn't be compiled
+    /// to the fast filter tree. Used in place of AST tree-walk for the
+    /// fallback path — handles all Expr variants including comprehensions,
+    /// selects, maps, etc.
+    fallback_closure: Option<ValueClosure>,
 }
 
 impl std::fmt::Debug for Filter {
@@ -418,29 +424,52 @@ impl Filter {
             }
         };
 
+        // Compile a closure for the fallback path. When the filter tree
+        // can't handle the expression (e.g. comprehensions, selects),
+        // we use this closure instead of walking the AST at eval time.
+        let fallback_closure = if tree.is_none() {
+            Some(compile_expression(&expression, &[]))
+        } else {
+            None
+        };
+
         Ok(Filter {
             tree,
             expression,
             var_names,
             var_indices,
+            fallback_closure,
         })
     }
 
     /// Evaluate the expression against a set of runtime values.
     ///
     /// If the expression was compiled to a filter tree, this runs in
-    /// ~1–6 ns per call — just array reads. Otherwise it falls back
-    /// transparently to the AST interpreter (~200 ns).
+    /// ~1–6 ns per call — just array reads. Otherwise it runs the
+    /// pre-compiled closure (~50–200 ns depending on expression
+    /// complexity) — no AST tree-walk at eval time.
     #[inline(always)]
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, ExecutionError> {
         if self.tree.is_some() {
             Ok(self.eval_bool(ctx))
-        } else {
+        } else if let Some(closure) = &self.fallback_closure {
             let mut map_ctx = crate::Context::default();
             // Use var_indices to look up each variable at its correct
             // schema index. This is correct regardless of the order of
             // var_names (which comes from a HashSet on the fallback path
             // and may not match schema ordering).
+            for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
+                map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
+            }
+            match closure(&map_ctx) {
+                Ok(Value::Bool(b)) => Ok(b),
+                Ok(_) => Ok(false),
+                Err(e) => Err(e),
+            }
+        } else {
+            // Should not happen — tree or fallback_closure is always set.
+            // Defensive fallback to AST interpreter.
+            let mut map_ctx = crate::Context::default();
             for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
                 map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
             }
@@ -577,32 +606,49 @@ mod tests {
     #[test]
     fn filter_eval_fallback_string_field() {
         // Similar test with string comparison, ensuring field indices
-        // are correctly resolved for string-typed variables.
+        // are correctly resolved for string-typed variables when the
+        // filter tree can't compile the expression.
         let mut schema = Schema::new();
         let x = schema.add_field("x", FieldType::Int);     // idx 0
         let method = schema.add_field("method", FieldType::String); // idx 1
-        let flag = schema.add_field("flag", FieldType::Int);  // idx 2
+        let _flag_bool = schema.add_field("flag_bool", FieldType::Bool); // idx 2
 
-        // Expression that fails filter tree compile: `flag && method.startsWith("G")`
-        // `flag` as bare Expr::Ident is uncompilable.
+        // Expression that fails filter tree compile because `flag_bool` is an Ident
+        // inside a LOGICAL_NOT (which tries to compile the inner as a tree first)
         let parser = Parser::default();
-        let expression = parser.parse("flag && method.startsWith('G')").unwrap();
+        let expression = parser.parse("flag_bool && method.startsWith('G')").unwrap();
         let filter = Filter::from_expression(expression, &schema).unwrap();
-        assert!(filter.tree.is_none());
+        assert!(filter.tree.is_some(), "BoolVar should handle this now");
 
-        let mut ctx = EvalContext::new(&schema);
-        ctx.set_i64(x, 99);
-        ctx.set_str(method, "GET");
-        ctx.set_i64(flag, 1); // truthy for AST's try_bool? No — try_bool requires CelBool
+        // Fallback path test: use an expression with Int != (previously unsupported,
+        // but now handled via NeStr). To truly trigger fallback, use something that
+        // the filter tree can't handle at all — like an Expr::Literal at top level.
+        // But that's not very useful. Let's instead verify the closure fallback works
+        // for the non-bool-field case by testing an expression that genuinely can't
+        // compile: `flag_int` where flag_int is an Int (not Bool), so Ident fails.
+        let mut schema2 = Schema::new();
+        let x2 = schema2.add_field("x", FieldType::Int);  // idx 0
+        let method2 = schema2.add_field("method", FieldType::String); // idx 1
+        let flag_int = schema2.add_field("flag_int", FieldType::Int); // idx 2 — NOT Bool
 
-        // This would fail because flag is an Int, not a Bool.
-        // That's expected — the test is about index correctness.
-        let result = filter.eval(&ctx);
-        // With old bug: flag might get method's value or x's value
-        // With fix: flag gets ctx[2] = Int(1) → try_bool downcast fails
+        let expr2: Expression = Parser::default().parse("flag_int && method.startsWith('G')").unwrap();
+        let filter2 = Filter::from_expression(expr2, &schema2).unwrap();
+        // tree is None because flag_int is Int, not Bool — Ident handler fails
+        assert!(filter2.tree.is_none());
+        // fallback closure should exist
+        assert!(filter2.fallback_closure.is_some());
+
+        let mut ctx2 = EvalContext::new(&schema2);
+        ctx2.set_i64(x2, 99);
+        ctx2.set_str(method2, "GET");
+        ctx2.set_i64(flag_int, 1);
+
+        // The closure evaluates flag_int (Int) as left operand of &&
+        // and should produce a type error (CEL doesn't coerce Int to Bool).
+        let result = filter2.eval(&ctx2);
         assert!(
             result.is_err(),
-            "expected type error from bool check on int"
+            "expected type error from bool check on int in closure fallback"
         );
     }
 

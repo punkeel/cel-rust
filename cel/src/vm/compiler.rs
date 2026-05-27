@@ -268,9 +268,22 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         return Ok(Value::Bool(false));
                     }
                     let r = right(ctx)?;
-                    if let Value::Bool(true) = r {
+                    match (l, r) {
+                        (Value::Bool(true), Value::Bool(b)) => Ok(Value::Bool(b)),
+                        (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
+                        _ => Err(ExecutionError::NoSuchOverload),
+                    }
+                });
+            }
+            operators::LOGICAL_OR => {
+                let left = compile_expr(reserved, &call.args[0].expr);
+                let right = compile_expr(reserved, &call.args[1].expr);
+                return Box::new(move |ctx| {
+                    let l = left(ctx)?;
+                    if let Value::Bool(true) = l {
                         return Ok(Value::Bool(true));
                     }
+                    let r = right(ctx)?;
                     match (l, r) {
                         (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
                         _ => Err(ExecutionError::NoSuchOverload),
