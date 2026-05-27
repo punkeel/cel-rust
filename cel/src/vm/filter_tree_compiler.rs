@@ -28,6 +28,71 @@ impl CompiledFilterTree {
     }
 }
 
+/// Generate a closure for an I64Expr (integer sub-expression).
+/// Enables closure-based eval for `size(path) > 5` and similar patterns.
+fn compile_closure_i64(expr: &I64Expr) -> Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> i64>> {
+    match expr {
+        I64Expr::Literal(v) => {
+            let v = *v;
+            Some(Box::new(move |_, _| v))
+        }
+        I64Expr::Var(idx) => {
+            let i = *idx;
+            Some(Box::new(move |ints, _| ints[i]))
+        }
+        I64Expr::Add(a, b) => {
+            let a_fn = compile_closure_i64(a)?;
+            let b_fn = compile_closure_i64(b)?;
+            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_add(b_fn(ints, s))))
+        }
+        I64Expr::Sub(a, b) => {
+            let a_fn = compile_closure_i64(a)?;
+            let b_fn = compile_closure_i64(b)?;
+            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_sub(b_fn(ints, s))))
+        }
+        I64Expr::Mul(a, b) => {
+            let a_fn = compile_closure_i64(a)?;
+            let b_fn = compile_closure_i64(b)?;
+            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_mul(b_fn(ints, s))))
+        }
+        I64Expr::Div(a, b) => {
+            let a_fn = compile_closure_i64(a)?;
+            let b_fn = compile_closure_i64(b)?;
+            Some(Box::new(move |ints, s| {
+                let bv = b_fn(ints, s);
+                if bv == 0 { 0 } else { a_fn(ints, s).wrapping_div(bv) }
+            }))
+        }
+        I64Expr::Mod(a, b) => {
+            let a_fn = compile_closure_i64(a)?;
+            let b_fn = compile_closure_i64(b)?;
+            Some(Box::new(move |ints, s| {
+                let bv = b_fn(ints, s);
+                if bv == 0 { 0 } else { a_fn(ints, s).wrapping_rem(bv) }
+            }))
+        }
+        I64Expr::Neg(a) => {
+            let a_fn = compile_closure_i64(a)?;
+            Some(Box::new(move |ints, s| a_fn(ints, s).wrapping_neg()))
+        }
+        I64Expr::StrLen(s) => match s.as_ref() {
+            StrExpr::Literal(st) => {
+                let len = st.len() as i64;
+                Some(Box::new(move |_, _| len))
+            }
+            StrExpr::Var(idx) => {
+                let i = *idx;
+                Some(Box::new(move |_, strings| strings[i].len() as i64))
+            }
+            StrExpr::Concat(a, b) => {
+                // Can't handle concat length without allocation — fall back
+                None
+            }
+        },
+        I64Expr::ListLen(_) => None, // ListExpr needs full Value enum
+    }
+}
+
 /// Generate a closure-based fast evaluator for a compiled filter node.
 /// Returns `None` for expressions that can't use typed arrays (I64Expr, etc.).
 pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> bool>> {
@@ -213,10 +278,37 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
             Some(Box::new(move |ints, strings| !inner_fn(ints, strings)))
         }
 
-        // ── I64Expr — fall back to FilterNode ──
-        FilterNode::GeExpr { .. } | FilterNode::GtExpr { .. }
-        | FilterNode::LeExpr { .. } | FilterNode::LtExpr { .. }
-        | FilterNode::EqExpr { .. } | FilterNode::NeExpr { .. } => None,
+        // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
+        FilterNode::GeExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) >= b(ints, strings)))
+        }
+        FilterNode::GtExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) > b(ints, strings)))
+        }
+        FilterNode::LeExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) <= b(ints, strings)))
+        }
+        FilterNode::LtExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) < b(ints, strings)))
+        }
+        FilterNode::EqExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) == b(ints, strings)))
+        }
+        FilterNode::NeExpr { left, right } => {
+            let a = compile_closure_i64(left)?;
+            let b = compile_closure_i64(right)?;
+            Some(Box::new(move |ints, strings| a(ints, strings) != b(ints, strings)))
+        }
     }
 }
 
