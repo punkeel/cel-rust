@@ -452,7 +452,10 @@ impl Filter {
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, ExecutionError> {
         if self.tree.is_some() {
             Ok(self.eval_bool(ctx))
-        } else if let Some(closure) = &self.fallback_closure {
+        } else {
+            let closure = self.fallback_closure.as_ref().expect(
+                "Filter must have either a compiled filter tree or a fallback closure",
+            );
             let mut map_ctx = crate::Context::default();
             // Use var_indices to look up each variable at its correct
             // schema index. This is correct regardless of the order of
@@ -462,18 +465,6 @@ impl Filter {
                 map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
             }
             match closure(&map_ctx) {
-                Ok(Value::Bool(b)) => Ok(b),
-                Ok(_) => Ok(false),
-                Err(e) => Err(e),
-            }
-        } else {
-            // Should not happen — tree or fallback_closure is always set.
-            // Defensive fallback to AST interpreter.
-            let mut map_ctx = crate::Context::default();
-            for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
-                map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
-            }
-            match Value::resolve(&self.expression, &map_ctx) {
                 Ok(Value::Bool(b)) => Ok(b),
                 Ok(_) => Ok(false),
                 Err(e) => Err(e),
