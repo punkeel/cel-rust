@@ -1,6 +1,7 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
+use crate::vm::filter_tree::{FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
+use crate::objects::Value;
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -307,6 +308,8 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
         // ── Specialized list membership (scan Value::List, can't use typed arrays) ──
         FilterNode::ExistsInIntSet { .. } => None,
         FilterNode::ExistsEqInt { .. } => None,
+        // ── Closure-based exists (predicate is fn(&Value), can't use typed arrays) ──
+        FilterNode::ExistsClosure { .. } => None,
 
         // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
         FilterNode::GeExpr { left, right } => {
@@ -507,6 +510,11 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
 
             // Detect list.exists(it, it == int_val) — direct scan, no alloc
             if let Some(f) = try_compile_exists_eq_int(ctx, comp) {
+                return Ok(f);
+            }
+            // Try to compile the predicate into a closure (any supported pattern)
+            // This avoids the scratch vector allocation entirely.
+            if let Some(f) = try_compile_exists_closure(ctx, comp) {
                 return Ok(f);
             }
 
@@ -720,6 +728,136 @@ fn try_compile_exists_eq_int(
 
     let list_idx = ctx.var_idx(&list_name);
     Some(Box::new(FilterNode::ExistsEqInt { list_idx, val }))
+}
+
+/// Try to compile `list.exists(it, predicate)` as `ExistsClosure`.
+/// Compiles the predicate to a `Box<dyn Fn(&Value) -> bool>` closure,
+/// avoiding scratch vector allocation at eval time.
+fn try_compile_exists_closure(
+    ctx: &mut FilterCtx,
+    comp: &crate::common::ast::ComprehensionExpr,
+) -> Option<Box<FilterNode>> {
+    let list_name = match &comp.iter_range.expr {
+        Expr::Ident(name) => name.clone(),
+        _ => return None,
+    };
+    let pred = match &comp.loop_step.expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR
+            && call.args.len() == 2 =>
+        {
+            match &call.args[0].expr {
+                Expr::Ident(name) if name == "@result" => &call.args[1].expr,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let closure = try_compile_item_predicate(pred, comp.iter_var.as_str())?;
+    let list_idx = ctx.var_idx(&list_name);
+    Some(Box::new(FilterNode::ExistsClosure {
+        list_idx,
+        predicate: ItemPredicate::new(closure),
+    }))
+}
+
+/// Compile a CEL predicate expression (operating on a single item variable)
+/// into a `Box<dyn Fn(&Value) -> bool>` closure.
+///
+/// Patterns handled:
+///   - `x == literal` (int, string)
+///   - `x != literal` (int, string)
+///   - `x @in [literal, ...]` (int list, string list)
+///   - `x.startsWith("str")`, `x.endsWith("str")`, `x.contains("str")`
+///   - `x.matches("regex")`
+///   - `a && b`, `a || b`, `!a`
+fn try_compile_item_predicate(
+    pred: &Expr,
+    iter_var: &str,
+) -> Option<Box<dyn Fn(&Value) -> bool>> {
+    match pred {
+        Expr::Call(call) if call.func_name.as_str() == operators::EQUALS && call.args.len() == 2 => {
+            let ident_name = iter_var;
+            if let (Expr::Ident(name), Expr::Literal(LiteralValue::Int(n))) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let val = *n.inner(); return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i == val))); }
+            }
+            if let (Expr::Literal(LiteralValue::Int(n)), Expr::Ident(name)) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let val = *n.inner(); return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i == val))); }
+            }
+            if let (Expr::Ident(name), Expr::Literal(LiteralValue::String(s))) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let needle: Arc<str> = Arc::from(s.inner()); return Some(Box::new(move |v| matches!(v, Value::String(s) if s.as_ref() == needle.as_ref()))); }
+            }
+            if let (Expr::Literal(LiteralValue::String(s)), Expr::Ident(name)) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let needle: Arc<str> = Arc::from(s.inner()); return Some(Box::new(move |v| matches!(v, Value::String(s) if s.as_ref() == needle.as_ref()))); }
+            }
+            None
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::NOT_EQUALS && call.args.len() == 2 => {
+            let ident_name = iter_var;
+            if let (Expr::Ident(name), Expr::Literal(LiteralValue::Int(n))) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let val = *n.inner(); return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i != val))); }
+            }
+            if let (Expr::Literal(LiteralValue::Int(n)), Expr::Ident(name)) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let val = *n.inner(); return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i != val))); }
+            }
+            if let (Expr::Ident(name), Expr::Literal(LiteralValue::String(s))) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let needle: Arc<str> = Arc::from(s.inner()); return Some(Box::new(move |v| matches!(v, Value::String(s) if s.as_ref() != needle.as_ref()))); }
+            }
+            if let (Expr::Literal(LiteralValue::String(s)), Expr::Ident(name)) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name { let needle: Arc<str> = Arc::from(s.inner()); return Some(Box::new(move |v| matches!(v, Value::String(s) if s.as_ref() != needle.as_ref()))); }
+            }
+            None
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::IN && call.args.len() == 2 => {
+            match &call.args[0].expr { Expr::Ident(name) if name == iter_var => {} _ => return None }
+            match &call.args[1].expr {
+                Expr::List(list) => {
+                    let mut ints = Vec::new();
+                    let mut all_int = true;
+                    for item in &list.elements {
+                        match &item.expr { Expr::Literal(LiteralValue::Int(n)) => ints.push(*n.inner()), _ => { all_int = false; break; } }
+                    }
+                    if all_int && !ints.is_empty() { return Some(Box::new(move |v| matches!(v, Value::Int(i) if ints.contains(i)))); }
+                    let mut strs: Vec<Arc<str>> = Vec::new();
+                    let mut all_str = true;
+                    for item in &list.elements {
+                        match &item.expr { Expr::Literal(LiteralValue::String(s)) => strs.push(Arc::from(s.inner())), _ => { all_str = false; break; } }
+                    }
+                    if all_str && !strs.is_empty() { return Some(Box::new(move |v| matches!(v, Value::String(s) if strs.iter().any(|x| x.as_ref() == s.as_ref())))); }
+                    None
+                }
+                _ => None,
+            }
+        }
+        Expr::Call(call) if call.args.len() == 1 => {
+            let func = call.func_name.as_str();
+            if !matches!(func, "startsWith" | "endsWith" | "contains" | "matches") { return None; }
+            let target_expr = call.target.as_ref()?;
+            match &target_expr.expr { Expr::Ident(name) if name == iter_var => {} _ => return None }
+            let val = match &call.args[0].expr { Expr::Literal(LiteralValue::String(s)) => s.inner().to_string(), _ => return None };
+            match func {
+                "startsWith" => { let p: Arc<str> = Arc::from(val.as_str()); Some(Box::new(move |v| matches!(v, Value::String(s) if s.starts_with(p.as_ref())))) }
+                "endsWith" => { let suffix: Arc<str> = Arc::from(val.as_str()); Some(Box::new(move |v| matches!(v, Value::String(s) if s.ends_with(suffix.as_ref())))) }
+                "contains" => { let sub: Arc<str> = Arc::from(val.as_str()); Some(Box::new(move |v| matches!(v, Value::String(s) if s.contains(sub.as_ref())))) }
+                "matches" => match regex::Regex::new(&val) { Ok(re) => Some(Box::new(move |v| matches!(v, Value::String(s) if re.is_match(s.as_ref())))), Err(_) => None }
+                _ => None,
+            }
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_AND && call.args.len() == 2 => {
+            let a = try_compile_item_predicate(&call.args[0].expr, iter_var)?;
+            let b = try_compile_item_predicate(&call.args[1].expr, iter_var)?;
+            Some(Box::new(move |v| a(v) && b(v)))
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR && call.args.len() == 2 => {
+            let a = try_compile_item_predicate(&call.args[0].expr, iter_var)?;
+            let b = try_compile_item_predicate(&call.args[1].expr, iter_var)?;
+            Some(Box::new(move |v| a(v) || b(v)))
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_NOT && call.args.len() == 1 => {
+            let inner = try_compile_item_predicate(&call.args[0].expr, iter_var)?;
+            Some(Box::new(move |v| !inner(v)))
+        }
+        _ => None,
+    }
 }
 
 /// Try to compile a pure OR-tree of `.contains(literal)` into a single AC scan.

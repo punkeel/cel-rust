@@ -1,4 +1,32 @@
 use crate::objects::Value;
+use std::sync::Arc;
+
+// ── Item predicate closure for ExistsClosure ──
+
+/// A boxed predicate on a single `&Value` reference.
+/// Used by `ExistsClosure` to evaluate predicates on each list element
+/// without allocating a scratch vector or cloning items.
+///
+/// Clone is via `Arc`, Debug is a stub — the closure itself is opaque.
+#[derive(Clone)]
+pub struct ItemPredicate(Arc<dyn Fn(&Value) -> bool>);
+
+impl std::fmt::Debug for ItemPredicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ItemPredicate").finish()
+    }
+}
+
+impl ItemPredicate {
+    pub fn new(f: Box<dyn Fn(&Value) -> bool>) -> Self {
+        Self(Arc::from(f))
+    }
+
+    #[inline(always)]
+    pub fn call(&self, v: &Value) -> bool {
+        (self.0)(v)
+    }
+}
 
 /// A typed integer expression that evaluates directly to `i64`.
 /// Used as a sub-expression inside boolean filters (e.g. `port + 100 >= 1024`).
@@ -297,6 +325,18 @@ pub enum FilterNode {
         predicate: Box<FilterNode>,
     },
 
+    // --- Exists with closure predicate (no alloc, no scratch vec) ---
+    /// `list.exists(x, predicate)`. Uses a pre-compiled closure that
+    /// takes `&Value` directly, avoiding the scratch vector allocation
+    /// and item cloning of the generic `Exists` node.
+    /// Handles any predicate that `try_compile_item_predicate` can compile:
+    /// `==`, `!=`, `@in`, `startsWith`, `endsWith`, `contains`, `matches`,
+    /// and their AND/OR/NOT compositions.
+    ExistsClosure {
+        list_idx: usize,
+        predicate: ItemPredicate,
+    },
+
     // --- Map-key contains (map["key"].exists(x, x == "val")) ---
     /// Optimized path for `map["key"].exists(x, x == "value")`.
     /// No allocation, no iteration — just a HashMap lookup + comparison.
@@ -552,6 +592,12 @@ impl FilterNode {
                     _ => false,
                 }
             }
+
+            // ── ExistsClosure (closure predicate, no alloc) ──
+            Self::ExistsClosure { list_idx, predicate } => match &vars[*list_idx] {
+                Value::List(list) => list.iter().any(|item| predicate.call(item)),
+                _ => false,
+            },
 
             // ── Map-key contains (single lookup, no alloc) ──
             Self::MapKeyContains { map_idx, key, needle } => {
@@ -928,6 +974,12 @@ impl FilterNode {
                 }
             }
 
+            // ── ExistsClosure (closure predicate, no alloc) ──
+            Self::ExistsClosure { list_idx, predicate } => match &vars[*list_idx] {
+                Value::List(list) => list.iter().any(|item| predicate.call(item)),
+                _ => false,
+            },
+
             // ── Map-key contains (single lookup, no alloc) ──
             Self::MapKeyContains { map_idx, key, needle } => {
                 let v = vars.get_unchecked(*map_idx);
@@ -1126,6 +1178,7 @@ impl FilterNode {
             Self::MapKeyContains { .. } => core::hint::unreachable_unchecked(),
             Self::ExistsInIntSet { .. } => core::hint::unreachable_unchecked(),
             Self::ExistsEqInt { .. } => core::hint::unreachable_unchecked(),
+            Self::ExistsClosure { .. } => core::hint::unreachable_unchecked(),
         }
     }
 }
