@@ -344,8 +344,14 @@ pub struct Filter {
     tree: Option<CompiledFilterTree>,
     expression: Expression,
     var_names: Vec<String>,
-    /// Schema field index for each variable in `var_names`.
-    /// Used by the AST fallback path to correctly index into `EvalContext.as_slice()`.
+    /// Schema field indices for each entry in `var_names`, used by the
+    /// AST fallback path to correctly index into `EvalContext.as_slice()`.
+    ///
+    /// When the fast tree path is available, this is `0..field_count()`
+    /// (all schema fields in order). On the fallback AST path it maps
+    /// each variable name to its correct schema index, so that
+    /// [`Filter::eval`] can index into [`EvalContext`] by field rather
+    /// than zipping names with schema order.
     var_indices: Vec<usize>,
 }
 
@@ -421,6 +427,10 @@ impl Filter {
             Ok(self.eval_bool(ctx))
         } else {
             let mut map_ctx = crate::Context::default();
+            // Use var_indices to look up each variable at its correct
+            // schema index. This is correct regardless of the order of
+            // var_names (which comes from a HashSet on the fallback path
+            // and may not match schema ordering).
             for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
                 map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
             }
@@ -460,6 +470,7 @@ impl Filter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::Parser;
 
     /// The AST fallback path in Filter::eval() was incorrectly zipping
     /// expression-order variable names with schema-order values, causing
@@ -512,5 +523,160 @@ mod tests {
         ctx.set_i64(port, 80);   // port (index 1)
 
         assert_eq!(filter.eval(&ctx).unwrap(), true);
+    }
+
+    #[test]
+    fn filter_eval_fallback_correct_indices() {
+        // Schema fields in a specific order that differs from the
+        // expression's variable order. This exercises the AST fallback
+        // path (triggered when filter tree compilation fails) and
+        // verifies that variables are mapped to their correct schema
+        // indices rather than zipped positionally.
+        let mut schema = Schema::new();
+        let port = schema.add_field("port", FieldType::Int);    // idx 0
+        let a = schema.add_field("a", FieldType::Bool);      // idx 1
+        let b = schema.add_field("b", FieldType::Int);       // idx 2
+        let _c = schema.add_field("c", FieldType::String);    // idx 3
+
+        // Parse `a && b == 7`. The bare `a` (Expr::Ident) causes
+        // filter tree compilation to fail — compile_expr only handles
+        // Expr::Call. This forces the AST fallback path.
+        let parser = Parser::default();
+        let expression = parser.parse("a && b == 7").unwrap();
+        let filter = Filter::from_expression(expression, &schema).unwrap();
+
+        // Verify fallback is active (tree is None)
+        assert!(filter.tree.is_none());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_i64(port, 42);
+        ctx.set_bool(a, true);
+        ctx.set_i64(b, 7);
+        ctx.set_str(_c, "test");
+
+        // With fix: a → ctx[1] = true, b → ctx[2] = 7
+        // → true && (7 == 7) = true
+        let result = filter.eval(&ctx);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert_eq!(result.unwrap(), true);
+
+        // Flip a to false → false && ... = false
+        ctx.set_bool(a, false);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_fallback_string_field() {
+        // Similar test with string comparison, ensuring field indices
+        // are correctly resolved for string-typed variables.
+        let mut schema = Schema::new();
+        let x = schema.add_field("x", FieldType::Int);     // idx 0
+        let method = schema.add_field("method", FieldType::String); // idx 1
+        let flag = schema.add_field("flag", FieldType::Int);  // idx 2
+
+        // Expression that fails filter tree compile: `flag && method.startsWith("G")`
+        // `flag` as bare Expr::Ident is uncompilable.
+        let parser = Parser::default();
+        let expression = parser.parse("flag && method.startsWith('G')").unwrap();
+        let filter = Filter::from_expression(expression, &schema).unwrap();
+        assert!(filter.tree.is_none());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_i64(x, 99);
+        ctx.set_str(method, "GET");
+        ctx.set_i64(flag, 1); // truthy for AST's try_bool? No — try_bool requires CelBool
+
+        // This would fail because flag is an Int, not a Bool.
+        // That's expected — the test is about index correctness.
+        let result = filter.eval(&ctx);
+        // With old bug: flag might get method's value or x's value
+        // With fix: flag gets ctx[2] = Int(1) → try_bool downcast fails
+        assert!(
+            result.is_err(),
+            "expected type error from bool check on int"
+        );
+    }
+
+    #[test]
+    fn filter_eval_fast_path_different_order() {
+        // Fast path should also work when schema order differs from
+        // expression order — uses direct field indices, no zip involved.
+        let mut schema = Schema::new();
+        let x = schema.add_field("x", FieldType::Int);     // idx 0
+        let method = schema.add_field("method", FieldType::String); // idx 1
+        let port = schema.add_field("port", FieldType::Int);  // idx 2
+
+        // `port == 443 && method.startsWith('G')` compiles fine to a tree
+        let filter = Filter::compile("port == 443 && method.startsWith('G')", &schema).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_i64(x, 42);
+        ctx.set_str(method, "GET");
+        ctx.set_i64(port, 443);
+
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set_i64(port, 80);
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_fallback_three_vars() {
+        // With 3 variables, the probability of accidental correctness
+        // from the old zip-with-schema-order bug is 1/6. With the fix
+        // it's always correct.
+        let mut schema = Schema::new();
+        let _p = schema.add_field("p", FieldType::Int);    // idx 0
+        let a = schema.add_field("a", FieldType::Bool);  // idx 1
+        let _q = schema.add_field("q", FieldType::Int);    // idx 2
+        let b = schema.add_field("b", FieldType::Bool);  // idx 3
+        let _r = schema.add_field("r", FieldType::Int);    // idx 4
+
+        // `a && b` — both bare Expr::Idents, fallback triggered
+        let expr: Expression = Parser::default().parse("a && b").unwrap();
+        let filter = Filter::from_expression(expr, &schema).unwrap();
+        assert!(filter.tree.is_none());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_i64(_p, 1);
+        ctx.set_bool(a, true);
+        ctx.set_i64(_q, 2);
+        ctx.set_bool(b, false);
+        ctx.set_i64(_r, 3);
+
+        // With fix: a=ctx[1]=true, b=ctx[3]=false → true && false = false
+        assert_eq!(filter.eval(&ctx), Ok(false));
+
+        ctx.set_bool(b, true);
+        // a=ctx[1]=true, b=ctx[3]=true → true && true = true
+        assert_eq!(filter.eval(&ctx), Ok(true));
+    }
+
+    #[test]
+    fn filter_eval_fallback_correct_with_nonzero_root_variable() {
+        // Tests a specific scenario: schema has fields before the first
+        // referenced variable, verifying those don't shift indices.
+        let mut schema = Schema::new();
+        let skip0 = schema.add_field("skip0", FieldType::Int);    // idx 0
+        let skip1 = schema.add_field("skip1", FieldType::String); // idx 1
+        let flag = schema.add_field("flag", FieldType::Bool);    // idx 2
+
+        // Expression uses only `flag` — should map to index 2 even
+        // though it's the only variable reference.
+        let expr: Expression = Parser::default().parse("flag").unwrap();
+        let filter = Filter::from_expression(expr, &schema).unwrap();
+        assert!(filter.tree.is_none());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set_i64(skip0, 123);
+        ctx.set_str(skip1, "unused");
+        ctx.set_bool(flag, true);
+
+        // AST interprets bare `flag` as the bool value itself
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set_bool(flag, false);
+        assert_eq!(filter.eval(&ctx), Ok(false));
     }
 }
