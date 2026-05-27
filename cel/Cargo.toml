@@ -31,10 +31,6 @@ dhat = { version = "0.3.3" }
 wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter.git" }
 
 [[bench]]
-name = "batch_eval"
-harness = false
-
-[[bench]]
 name = "score"
 harness = false
 
