@@ -306,6 +306,24 @@ pub enum FilterNode {
         key: String,
         needle: String,
     },
+
+    // --- List membership check: list.exists(x, x in [vals]) ---
+    /// Optimized path for `list.exists(x, x in [int1, int2, ...])`.
+    /// No allocation, no scratch vector, no item clone — scans the list
+    /// directly and compares each element against the embedded int set.
+    /// Eliminates the per-eval `vars.to_vec()` + `item.clone()` overhead
+    /// of the generic `Exists` node.
+    ExistsInIntSet {
+        list_idx: usize,
+        vals: Vec<i64>,
+    },
+
+    // --- List membership check: list.exists(x, x == val) ---
+    /// Same as ExistsInIntSet but for a single literal comparison.
+    ExistsEqInt {
+        list_idx: usize,
+        val: i64,
+    },
 }
 
 impl FilterNode {
@@ -551,6 +569,17 @@ impl FilterNode {
                     _ => false,
                 }
             }
+
+            // ── Specialized exists-in-int-set (no alloc, no scratch vec) ──
+            Self::ExistsInIntSet { list_idx, vals } => match &vars[*list_idx] {
+                Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if vals.contains(i))),
+                _ => false,
+            },
+            // ── Specialized exists-eq-int (no alloc, no scratch vec) ──
+            Self::ExistsEqInt { list_idx, val } => match &vars[*list_idx] {
+                Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if *i == *val)),
+                _ => false,
+            },
         }
     }
 
@@ -916,12 +945,28 @@ impl FilterNode {
                     _ => false,
                 }
             }
+
+            // ── Specialized exists-in-int-set (no alloc, no scratch vec) ──
+            Self::ExistsInIntSet { list_idx, vals } => {
+                let v = vars.get_unchecked(*list_idx);
+                match v {
+                    Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if vals.contains(i))),
+                    _ => false,
+                }
+            }
+            // ── Specialized exists-eq-int (no alloc, no scratch vec) ──
+            Self::ExistsEqInt { list_idx, val } => {
+                let v = vars.get_unchecked(*list_idx);
+                match v {
+                    Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if *i == *val)),
+                    _ => false,
+                }
             }
         }
+    }
 
     /// Evaluate using pre-extracted typed arrays — no Value enum access.
     ///
-    /// # Safety
     ///
     /// Same as [`eval_fast`], plus: the typed arrays must have been populated
     /// by [`EvalContext`](crate::fast::EvalContext) (which the fast path does).
@@ -1079,6 +1124,8 @@ impl FilterNode {
             // ── Comprehension: exists() (can't extend typed arrays) ──
             Self::Exists { .. } => core::hint::unreachable_unchecked(),
             Self::MapKeyContains { .. } => core::hint::unreachable_unchecked(),
+            Self::ExistsInIntSet { .. } => core::hint::unreachable_unchecked(),
+            Self::ExistsEqInt { .. } => core::hint::unreachable_unchecked(),
         }
     }
 }

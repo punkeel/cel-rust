@@ -304,6 +304,10 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
         // ── Map-key contains (HashMap lookup, can't use typed arrays) ──
         FilterNode::MapKeyContains { .. } => None,
 
+        // ── Specialized list membership (scan Value::List, can't use typed arrays) ──
+        FilterNode::ExistsInIntSet { .. } => None,
+        FilterNode::ExistsEqInt { .. } => None,
+
         // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
         FilterNode::GeExpr { left, right } => {
             let a = compile_closure_i64(left)?;
@@ -496,6 +500,18 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
                 return Ok(f);
             }
 
+            // Detect list.exists(it, it in [int1, int2, ...]) — direct scan, no alloc
+            if let Some(f) = try_compile_exists_in_int_set(ctx, comp) {
+                return Ok(f);
+            }
+
+            // Detect list.exists(it, it == int_val) — direct scan, no alloc
+            if let Some(f) = try_compile_exists_eq_int(ctx, comp) {
+                return Ok(f);
+            }
+
+            // Fall through to generic Exists with scratch vector
+
             // Extract the list variable from iter_range
             let list_name = match &comp.iter_range.expr {
                 Expr::Ident(name) => name.clone(),
@@ -600,6 +616,110 @@ fn try_compile_map_key_exists(
         key: map_key,
         needle,
     }))
+}
+
+/// Try to compile `list.exists(it, it in [int1, int2, ...])` as a single
+/// `ExistsInIntSet` node — no allocation, no scratch vector, no item clone.
+/// Scans the list directly and checks each element against the embedded set.
+fn try_compile_exists_in_int_set(
+    ctx: &mut FilterCtx,
+    comp: &crate::common::ast::ComprehensionExpr,
+) -> Option<Box<FilterNode>> {
+    // iter_range must be Expr::Ident (a field name)
+    let list_name = match &comp.iter_range.expr {
+        Expr::Ident(name) => name.clone(),
+        _ => return None,
+    };
+
+    // Extract predicate from loop_step: @result || <predicate>
+    let pred = match &comp.loop_step.expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR
+            && call.args.len() == 2 =>
+        {
+            match &call.args[0].expr {
+                Expr::Ident(name) if name == "@result" => &call.args[1].expr,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    // Predicate must be: it @in [int_literals]
+    let vals = match pred {
+        Expr::Call(call) if call.func_name.as_str() == operators::IN
+            && call.args.len() == 2 =>
+        {
+            // Left must be the iteration variable
+            match &call.args[0].expr {
+                Expr::Ident(name) if name == comp.iter_var.as_str() => {},
+                _ => return None,
+            }
+            // Right must be a list of int literals
+            match &call.args[1].expr {
+                Expr::List(list) => {
+                    let mut vals = Vec::with_capacity(list.elements.len());
+                    for item in &list.elements {
+                        match &item.expr {
+                            Expr::Literal(LiteralValue::Int(n)) => vals.push(*n.inner()),
+                            _ => return None, // non-int literal in list
+                        }
+                    }
+                    vals
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    let list_idx = ctx.var_idx(&list_name);
+    Some(Box::new(FilterNode::ExistsInIntSet { list_idx, vals }))
+}
+
+/// Try to compile `list.exists(it, it == int_val)` as a single
+/// `ExistsEqInt` node — no allocation, no scratch vector.
+fn try_compile_exists_eq_int(
+    ctx: &mut FilterCtx,
+    comp: &crate::common::ast::ComprehensionExpr,
+) -> Option<Box<FilterNode>> {
+    // iter_range must be Expr::Ident
+    let list_name = match &comp.iter_range.expr {
+        Expr::Ident(name) => name.clone(),
+        _ => return None,
+    };
+
+    // Extract predicate from loop_step
+    let pred = match &comp.loop_step.expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR
+            && call.args.len() == 2 =>
+        {
+            match &call.args[0].expr {
+                Expr::Ident(name) if name == "@result" => &call.args[1].expr,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    // Predicate must be: it == int_val or int_val == it
+    let val = match pred {
+        Expr::Call(call) if call.func_name.as_str() == operators::EQUALS
+            && call.args.len() == 2 =>
+        {
+            let ident_name = comp.iter_var.as_str();
+            match (&call.args[0].expr, &call.args[1].expr) {
+                (Expr::Ident(name), Expr::Literal(LiteralValue::Int(n)))
+                    if name == ident_name => *n.inner(),
+                (Expr::Literal(LiteralValue::Int(n)), Expr::Ident(name))
+                    if name == ident_name => *n.inner(),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    let list_idx = ctx.var_idx(&list_name);
+    Some(Box::new(FilterNode::ExistsEqInt { list_idx, val }))
 }
 
 /// Try to compile a pure OR-tree of `.contains(literal)` into a single AC scan.

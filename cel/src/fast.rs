@@ -878,7 +878,58 @@ mod tests {
     }
 }
 
-    #[test]
+#[test]
+fn filter_eval_exists_in_int_set() {
+    // bot_ids.exists(id, id in [42, 99]) should compile to ExistsInIntSet
+    let mut schema = Schema::new();
+    let bot_ids = schema.add_field("bot_ids", FieldType::Any);
+    let filter = Filter::compile(
+        "bot_ids.exists(id, id in [42, 99])", &schema,
+    ).unwrap();
+    assert!(filter.tree.is_some());
+
+    let mut ctx = EvalContext::new(&schema);
+    ctx.set(bot_ids, Value::List(Arc::new(vec![
+        Value::Int(1),
+        Value::Int(42),
+        Value::Int(3),
+    ])));
+    assert_eq!(filter.eval(&ctx), Ok(true));
+
+    ctx.set(bot_ids, Value::List(Arc::new(vec![
+        Value::Int(1),
+        Value::Int(2),
+        Value::Int(3),
+    ])));
+    assert_eq!(filter.eval(&ctx), Ok(false));
+}
+
+#[test]
+fn filter_eval_exists_eq_int_node() {
+    // bot_ids.exists(id, id == 42) should compile to ExistsEqInt
+    let mut schema = Schema::new();
+    let bot_ids = schema.add_field("bot_ids", FieldType::Any);
+    let filter = Filter::compile(
+        "bot_ids.exists(id, id == 42)", &schema,
+    ).unwrap();
+    assert!(filter.tree.is_some());
+
+    let mut ctx = EvalContext::new(&schema);
+    ctx.set(bot_ids, Value::List(Arc::new(vec![
+        Value::Int(1),
+        Value::Int(42),
+        Value::Int(3),
+    ])));
+    assert_eq!(filter.eval(&ctx), Ok(true));
+
+    ctx.set(bot_ids, Value::List(Arc::new(vec![
+        Value::Int(1),
+        Value::Int(2),
+    ])));
+    assert_eq!(filter.eval(&ctx), Ok(false));
+}
+
+#[test]
     fn filter_eval_map_key_contains() {
         let mut schema = Schema::new();
         let hdrs = schema.add_field("http__headers_map", FieldType::Any);
