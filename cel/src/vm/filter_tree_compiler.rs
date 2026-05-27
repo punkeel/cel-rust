@@ -774,7 +774,7 @@ fn try_compile_int_cmp(
             _ => None,
         };
         // Helper: extract literal i64 from an expr
-        let mut lit_val = |e: &Expr| match e {
+        let lit_val = |e: &Expr| match e {
             Expr::Literal(LiteralValue::Int(i)) => Some(*i.inner()),
             _ => None,
         };

@@ -296,18 +296,6 @@ impl EvalContext {
         unsafe { &*(*self.strings.get_unchecked(idx)).as_ref() }
     }
 
-    /// Expose typed int array for eval_fast_typed.
-    #[inline]
-    pub(crate) fn ints(&self) -> &[i64] {
-        &self.ints
-    }
-
-    /// Expose typed string array for eval_fast_typed.
-    #[inline]
-    pub(crate) fn strings(&self) -> &[Arc<str>] {
-        &self.strings
-    }
-
     /// Reset all values to `Value::Null` (retains allocation).
     #[inline]
     pub fn clear(&mut self) {
@@ -343,7 +331,6 @@ impl std::fmt::Debug for EvalContext {
 /// to the caller and only ~50× slower (still only ~200 ns).
 pub struct Filter {
     tree: Option<CompiledFilterTree>,
-    expression: Expression,
     var_names: Vec<String>,
     /// Schema field indices for each entry in `var_names`, used by the
     /// AST fallback path to correctly index into `EvalContext.as_slice()`.
@@ -435,7 +422,6 @@ impl Filter {
 
         Ok(Filter {
             tree,
-            expression,
             var_names,
             var_indices,
             fallback_closure,

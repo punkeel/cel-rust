@@ -26,32 +26,7 @@ impl std::fmt::Debug for CompiledFilterNode {
     }
 }
 
-// ── Compiled filter with named variables ──
-
-/// A compiled filter expression with known variable names.
-pub struct CompiledFilter {
-    pub compiled: CompiledFilterNode,
-    pub var_names: Vec<String>,
-}
-
-impl CompiledFilter {
-    pub fn eval(&self, vars: &[Value]) -> Value {
-        self.compiled.eval(vars)
-    }
-
-    pub fn bind_vars(&self, ctx: &crate::Context) -> Vec<Value> {
-        self.var_names
-            .iter()
-            .map(|name| {
-                ctx.get_variable(name)
-                    .and_then(|cow| Value::try_from(cow.as_ref()).ok())
-                    .unwrap_or(Value::Null)
-            })
-            .collect()
-    }
-}
 // ── Item predicate closure for ExistsClosure ──
-
 /// A boxed predicate on a single `&Value` reference.
 /// Used by `ExistsClosure` to evaluate predicates on each list element
 /// without allocating a scratch vector or cloning items.

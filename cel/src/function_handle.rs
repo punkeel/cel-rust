@@ -1,5 +1,5 @@
 use crate::common::{
-    ast::{CallExpr, EntryExpr, Expr, IdedExpr},
+    ast::{EntryExpr, Expr, IdedExpr},
     decls::FunctionDecl,
     types::{Kind, Type},
     value::Val,
@@ -39,6 +39,7 @@ impl FunctionHandle {
 
 /// Information needed to resolve a function call at parse/compile time.
 pub struct FunctionResolver<'a> {
+    #[allow(dead_code)]
     env: &'a Env,
     name_to_id: std::collections::BTreeMap<String, u16>,
     functions: Vec<&'a FunctionDecl>,
