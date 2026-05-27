@@ -286,6 +286,16 @@ pub enum FilterNode {
     And(Box<FilterNode>, Box<FilterNode>),
     Or(Box<FilterNode>, Box<FilterNode>),
     Not(Box<FilterNode>),
+
+    // --- Comprehension: exists() ---
+    /// `list.exists(x, predicate)`. Iterates a list field and evaluates
+    /// the predicate against each element placed at `item_idx`.
+    /// Covers all 5 remaining corpus rules (rule_000/006/014/016/022).
+    Exists {
+        list_idx: usize,
+        item_idx: usize,
+        predicate: Box<FilterNode>,
+    },
 }
 
 impl FilterNode {
@@ -496,6 +506,24 @@ impl FilterNode {
             Self::And(a, b) => a.eval(vars) && b.eval(vars),
             Self::Or(a, b) => a.eval(vars) || b.eval(vars),
             Self::Not(inner) => !inner.eval(vars),
+
+            // ── Comprehension: exists() ──
+            Self::Exists { list_idx, item_idx, predicate } => {
+                match &vars[*list_idx] {
+                    Value::List(list) => {
+                        let mut extended: Vec<Value> = vars.to_vec();
+                        extended.push(Value::Null);
+                        for item in list.iter() {
+                            extended[*item_idx] = item.clone();
+                            if predicate.eval(&extended) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -824,6 +852,25 @@ impl FilterNode {
             Self::And(a, b) => a.eval_fast(vars) && b.eval_fast(vars),
             Self::Or(a, b) => a.eval_fast(vars) || b.eval_fast(vars),
             Self::Not(inner) => !inner.eval_fast(vars),
+
+            // ── Comprehension: exists() (extend vars, unsafe indexing) ──
+            Self::Exists { list_idx, item_idx, predicate } => {
+                let v = vars.get_unchecked(*list_idx);
+                match v {
+                    Value::List(list) => {
+                        let mut extended: Vec<Value> = vars.to_vec();
+                        extended.push(Value::Null);
+                        for item in list.iter() {
+                            extended[*item_idx] = item.clone();
+                            if predicate.eval_fast(&extended) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -983,6 +1030,9 @@ impl FilterNode {
             Self::And(a, b) => a.eval_fast_typed(ints, strings) && b.eval_fast_typed(ints, strings),
             Self::Or(a, b) => a.eval_fast_typed(ints, strings) || b.eval_fast_typed(ints, strings),
             Self::Not(inner) => !inner.eval_fast_typed(ints, strings),
+
+            // ── Comprehension: exists() (can't extend typed arrays) ──
+            Self::Exists { .. } => core::hint::unreachable_unchecked(),
         }
     }
 }

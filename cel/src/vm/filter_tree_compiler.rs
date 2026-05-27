@@ -298,6 +298,9 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
             Some(Box::new(move |ints, strings| !inner_fn(ints, strings)))
         }
 
+        // ── Comprehension: exists() (can't use typed arrays) ──
+        FilterNode::Exists { .. } => None,
+
         // ── I64Expr comparisons (compiled to closures via compile_closure_i64) ──
         FilterNode::GeExpr { left, right } => {
             let a = compile_closure_i64(left)?;
@@ -470,6 +473,45 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
             }
 
             Err(format!("unsupported filter expr: {}", name))
+        }
+        Expr::Comprehension(comp) => {
+            // Detect exists() pattern: accu_var="@result", accu_init=false,
+            // loop_step = @result || <predicate>, iter_var2 = None.
+            let is_exists = matches!(&comp.accu_init.expr,
+                Expr::Literal(LiteralValue::Boolean(b)) if !*b.inner()
+            ) && comp.accu_var == "@result"
+              && comp.iter_var2.is_none();
+
+            if !is_exists {
+                return Err("unsupported comprehension pattern".into());
+            }
+
+            // Extract the list variable from iter_range
+            let list_name = match &comp.iter_range.expr {
+                Expr::Ident(name) => name.clone(),
+                _ => return Err("exists() on non-ident range not supported".into()),
+            };
+            let list_idx = ctx.var_idx(&list_name);
+
+            // Register the iteration variable (gets index = field_count)
+            let item_idx = ctx.var_idx(&comp.iter_var);
+
+            // Extract predicate from loop_step: @result || <predicate>
+            let predicate = match &comp.loop_step.expr {
+                Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR
+                    && call.args.len() == 2 =>
+                {
+                    match &call.args[0].expr {
+                        Expr::Ident(name) if name == "@result" => {
+                            compile_expr(ctx, &call.args[1].expr)?
+                        }
+                        _ => return Err("unsupported exists() predicate structure".into()),
+                    }
+                }
+                _ => return Err("unsupported exists() pattern".into()),
+            };
+
+            Ok(Box::new(FilterNode::Exists { list_idx, item_idx, predicate }))
         }
         Expr::Ident(name) => {
             // Boolean-typed fields can be used directly as predicates.

@@ -795,4 +795,85 @@ mod tests {
         ctx.set_bool(flag, false);
         assert_eq!(filter.eval(&ctx), Ok(true));
     }
+
+    #[test]
+    fn filter_eval_exists_int_list() {
+        // bot_ids.exists(id, id > 5) — compiles to Exists filter node
+        let mut schema = Schema::new();
+        let bot_ids = schema.add_field("bot_ids", FieldType::Any);
+        let filter = Filter::compile(
+            "bot_ids.exists(id, id > 5)", &schema,
+        ).unwrap();
+        // Should compile to filter tree via Exists node
+        assert!(filter.tree.is_some(), "exists() should compile to filter tree");
+
+        let mut ctx = EvalContext::new(&schema);
+        // Empty list → false
+        ctx.set(bot_ids, Value::List(Arc::new(vec![])));
+        assert_eq!(filter.eval(&ctx), Ok(false));
+
+        // List with values ≤ 5 → false
+        ctx.set(bot_ids, Value::List(Arc::new(vec![
+            Value::Int(1),
+            Value::Int(3),
+            Value::Int(5),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(false));
+
+        // List with any value > 5 → true
+        ctx.set(bot_ids, Value::List(Arc::new(vec![
+            Value::Int(1),
+            Value::Int(7),
+            Value::Int(3),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(true));
+    }
+
+    #[test]
+    fn filter_eval_exists_eq_int() {
+        // bot_ids.exists(id, id == 42)
+        let mut schema = Schema::new();
+        let bot_ids = schema.add_field("bot_ids", FieldType::Any);
+        let filter = Filter::compile(
+            "bot_ids.exists(id, id == 42)", &schema,
+        ).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set(bot_ids, Value::List(Arc::new(vec![
+            Value::Int(1),
+            Value::Int(42),
+            Value::Int(3),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set(bot_ids, Value::List(Arc::new(vec![
+            Value::Int(1),
+            Value::Int(2),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
+
+    #[test]
+    fn filter_eval_exists_str_list() {
+        // names.exists(n, n == "bob")
+        let mut schema = Schema::new();
+        let names = schema.add_field("names", FieldType::Any);
+        let filter = Filter::compile(
+            r#"names.exists(n, n == "bob")"#, &schema,
+        ).unwrap();
+        assert!(filter.tree.is_some());
+
+        let mut ctx = EvalContext::new(&schema);
+        ctx.set(names, Value::List(Arc::new(vec![
+            Value::String(Arc::from("alice")),
+            Value::String(Arc::from("bob")),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(true));
+
+        ctx.set(names, Value::List(Arc::new(vec![
+            Value::String(Arc::from("alice")),
+        ])));
+        assert_eq!(filter.eval(&ctx), Ok(false));
+    }
 }
