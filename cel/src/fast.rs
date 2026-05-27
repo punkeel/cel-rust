@@ -170,6 +170,11 @@ impl Default for Schema {
 /// ```
 pub struct EvalContext {
     values: Box<[Value]>,
+    /// Fast-access typed arrays — set_* writes here too.
+    /// Filter tree nodes read from these directly, skipping the
+    /// Value enum match + 24-byte stride.
+    ints: Box<[i64]>,
+    strings: Box<[Arc<str>]>,
     /// Interned strings — persists across `clear()` to avoid
     /// re-allocating common values like `"GET"`, `"/api"`, etc.
     string_cache: Vec<Arc<str>>,
@@ -178,12 +183,15 @@ pub struct EvalContext {
 impl EvalContext {
     /// Allocate a new context matching the schema.
     ///
-    /// All fields are initialized to `Value::Null`.
+    /// All fields are initialized to `Value::Null`/zero/empty.
     #[inline]
     pub fn new(schema: &Schema) -> Self {
-        let values = vec![Value::Null; schema.field_count()].into_boxed_slice();
+        let len = schema.field_count();
+        let empty: Arc<str> = Arc::from("");
         Self {
-            values,
+            values: vec![Value::Null; len].into_boxed_slice(),
+            ints: vec![0i64; len].into_boxed_slice(),
+            strings: vec![Arc::clone(&empty); len].into_boxed_slice(),
             string_cache: Vec::new(),
         }
     }
@@ -201,7 +209,9 @@ impl EvalContext {
     /// Set an integer field. O(1).
     #[inline]
     pub fn set_i64(&mut self, field: Field, val: i64) {
-        self.values[field.0 as usize] = Value::Int(val);
+        let idx = field.0 as usize;
+        self.values[idx] = Value::Int(val);
+        self.ints[idx] = val;
     }
 
     /// Set an unsigned integer field. O(1).
@@ -227,24 +237,26 @@ impl EvalContext {
     /// linear scan + `Arc::clone` (~3 ns).
     #[inline]
     pub fn set_str(&mut self, field: Field, val: &str) {
+        let idx = field.0 as usize;
         let arc = self.intern(val);
-        self.values[field.0 as usize] = Value::String(arc);
+        self.values[idx] = Value::String(Arc::clone(&arc));
+        self.strings[idx] = arc;
     }
 
     /// Set a string field from an owned `String`. O(1) + Arc allocation
     /// on first unique string; cached on subsequent calls.
     #[inline]
     pub fn set_string(&mut self, field: Field, val: String) {
+        let idx = field.0 as usize;
         let arc = self.intern(val.as_str());
-        self.values[field.0 as usize] = Value::String(arc);
+        self.values[idx] = Value::String(Arc::clone(&arc));
+        self.strings[idx] = arc;
     }
 
     /// Intern a string: return existing `Arc<str>` if cached,
     /// otherwise allocate, cache, and return.
     fn intern(&mut self, s: &str) -> Arc<str> {
         // Linear scan — fast for small caches (typical: < 10 unique strings).
-        // For larger caches a HashMap would be better, but real-world
-        // EvalContexts rarely have > 20 unique string values.
         for arc in &self.string_cache {
             if &**arc == s {
                 return Arc::clone(arc);
@@ -267,10 +279,41 @@ impl EvalContext {
         &self.values
     }
 
+    /// Fast-access: read i64 value directly (no enum match).
+    /// Only valid for fields declared as Int.
+    #[inline]
+    pub fn get_i64_fast(&self, idx: usize) -> i64 {
+        // Safety: Schema guarantees field idx is Int
+        unsafe { *self.ints.get_unchecked(idx) }
+    }
+
+    /// Fast-access: read string value directly (no enum match).
+    /// Only valid for fields declared as String.
+    #[inline]
+    pub fn get_str_fast(&self, idx: usize) -> &str {
+        // Safety: Schema guarantees field idx is String
+        unsafe { &*(*self.strings.get_unchecked(idx)).as_ref() }
+    }
+
+    /// Expose typed int array for eval_fast_typed.
+    #[inline]
+    pub(crate) fn ints(&self) -> &[i64] {
+        &self.ints
+    }
+
+    /// Expose typed string array for eval_fast_typed.
+    #[inline]
+    pub(crate) fn strings(&self) -> &[Arc<str>] {
+        &self.strings
+    }
+
     /// Reset all values to `Value::Null` (retains allocation).
     #[inline]
     pub fn clear(&mut self) {
         self.values.fill(Value::Null);
+        self.ints.fill(0);
+        let empty: Arc<str> = Arc::from("");
+        self.strings.fill(empty);
     }
 
     /// Number of fields in this context.
@@ -376,9 +419,9 @@ impl Filter {
     /// the filter tree was not compiled (use [`eval`] for fallback).
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        // Safety: Schema guarantees all field indices are in-bounds
-        // and all value types match the expected variants.
-        unsafe { self.tree.as_ref().unwrap().filter.eval_fast(ctx.as_slice()) }
+        // Safety: Schema guarantees all field indices are in-bounds,
+        // all value types match, and typed arrays are populated.
+        unsafe { self.tree.as_ref().unwrap().filter.eval_fast_typed(ctx.ints(), ctx.strings()) }
     }
 
     /// Variable names referenced by this filter, in index order.

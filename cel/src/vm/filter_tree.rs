@@ -781,6 +781,158 @@ impl FilterNode {
             Self::Not(inner) => !inner.eval_fast(vars),
         }
     }
+
+    /// Evaluate using pre-extracted typed arrays — no Value enum access.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`eval_fast`], plus: the typed arrays must have been populated
+    /// by [`EvalContext`](crate::fast::EvalContext) (which the fast path does).
+    #[inline(always)]
+    pub unsafe fn eval_fast_typed(
+        &self,
+        ints: &[i64],
+        strings: &[std::sync::Arc<str>],
+    ) -> bool {
+        match self {
+            // ── Int comparisons (direct i64 access) ──
+            Self::EqInt { idx, val } => *ints.get_unchecked(*idx) == *val,
+            Self::NeInt { idx, val } => *ints.get_unchecked(*idx) != *val,
+            Self::LtInt { idx, val } => *ints.get_unchecked(*idx) < *val,
+            Self::LeInt { idx, val } => *ints.get_unchecked(*idx) <= *val,
+            Self::GtInt { idx, val } => *ints.get_unchecked(*idx) > *val,
+            Self::GeInt { idx, val } => *ints.get_unchecked(*idx) >= *val,
+
+            // ── Fused arithmetic + comparison (direct i64 access) ──
+            Self::AddEq { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) == *cmp
+            }
+            Self::AddNe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) != *cmp
+            }
+            Self::AddLt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) < *cmp
+            }
+            Self::AddLe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) <= *cmp
+            }
+            Self::AddGt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) > *cmp
+            }
+            Self::AddGe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_add(*arith) >= *cmp
+            }
+            Self::SubEq { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) == *cmp
+            }
+            Self::SubNe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) != *cmp
+            }
+            Self::SubLt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) < *cmp
+            }
+            Self::SubLe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) <= *cmp
+            }
+            Self::SubGt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) > *cmp
+            }
+            Self::SubGe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_sub(*arith) >= *cmp
+            }
+            Self::MulEq { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) == *cmp
+            }
+            Self::MulNe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) != *cmp
+            }
+            Self::MulLt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) < *cmp
+            }
+            Self::MulLe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) <= *cmp
+            }
+            Self::MulGt { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) > *cmp
+            }
+            Self::MulGe { idx, arith, cmp } => {
+                ints.get_unchecked(*idx).wrapping_mul(*arith) >= *cmp
+            }
+
+            // ── String comparison (direct Arc<str> access) ──
+            Self::EqStr { idx, val } => strings.get_unchecked(*idx).as_ref() == val.as_str(),
+
+            // ── Set membership: int ──
+            Self::InIntLinear { idx, vals } => vals.contains(ints.get_unchecked(*idx)),
+            Self::InIntHash { idx, set } => set.contains(ints.get_unchecked(*idx)),
+
+            // ── Set membership: str ──
+            Self::InStrLinear { idx, vals } => {
+                let s: &str = strings.get_unchecked(*idx).as_ref();
+                vals.iter().any(|v| s == v)
+            }
+            Self::InStrHash { idx, set } => {
+                let s: &str = strings.get_unchecked(*idx).as_ref();
+                set.contains(s)
+            }
+
+            // ── String methods ──
+            Self::StartsWith { idx, prefix } => {
+                strings.get_unchecked(*idx).starts_with(prefix.as_str())
+            }
+            Self::EndsWith { idx, suffix } => {
+                strings.get_unchecked(*idx).ends_with(suffix.as_str())
+            }
+            Self::Contains { idx, substring } => {
+                strings.get_unchecked(*idx).contains(substring.as_str())
+            }
+
+            // ── Multi-pattern contains ──
+            Self::ContainsAny { idx, needles } => {
+                let text: &str = strings.get_unchecked(*idx).as_ref();
+                for needle in needles {
+                    if text.contains(needle.as_str()) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Self::AhoContains { idx, ac, min } => {
+                let text = strings.get_unchecked(*idx).as_bytes();
+                if *min <= 1 {
+                    return ac.is_match(text);
+                }
+                let mut matched = 0u64;
+                for mat in ac.find_iter(text) {
+                    let pid = mat.pattern().as_u64();
+                    if pid < 64 {
+                        matched |= 1u64 << pid;
+                        if matched.count_ones() as usize >= *min {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+
+            // ── I64Expr / other — fall back to vars path ──
+            Self::GeExpr { .. }
+            | Self::GtExpr { .. }
+            | Self::LeExpr { .. }
+            | Self::LtExpr { .. }
+            | Self::EqExpr { .. }
+            | Self::NeExpr { .. } => {
+                // These use I64Expr which needs the full Value enum
+                // This path is rarely hit for Schema-compiled expressions
+                core::hint::unreachable_unchecked()
+            }
+
+            // ── Logic combinators (recursively call eval_fast_typed) ──
+            Self::And(a, b) => a.eval_fast_typed(ints, strings) && b.eval_fast_typed(ints, strings),
+            Self::Or(a, b) => a.eval_fast_typed(ints, strings) || b.eval_fast_typed(ints, strings),
+            Self::Not(inner) => !inner.eval_fast_typed(ints, strings),
+        }
+    }
 }
 
 // ---------- Batch / ruleset evaluation ----------
