@@ -842,11 +842,42 @@ fn try_compile_item_predicate(
                 _ => None,
             }
         }
+        // ── Comparison operators (it > literal, etc.) ──
+        Expr::Call(call) if call.args.len() == 2 && matches!(call.func_name.as_str(), operators::GREATER_EQUALS | operators::GREATER | operators::LESS_EQUALS | operators::LESS) => {
+            let ident_name = iter_var;
+            if let (Expr::Ident(name), Expr::Literal(LiteralValue::Int(n))) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name {
+                    let val = *n.inner();
+                    match call.func_name.as_str() {
+                        operators::GREATER_EQUALS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i >= val))),
+                        operators::GREATER => return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i > val))),
+                        operators::LESS_EQUALS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i <= val))),
+                        operators::LESS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if *i < val))),
+                        _ => {}
+                    }
+                }
+            }
+            if let (Expr::Literal(LiteralValue::Int(n)), Expr::Ident(name)) = (&call.args[0].expr, &call.args[1].expr) {
+                if name == ident_name {
+                    let val = *n.inner();
+                    match call.func_name.as_str() {
+                        operators::GREATER_EQUALS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if val >= *i))),
+                        operators::GREATER => return Some(Box::new(move |v| matches!(v, Value::Int(i) if val > *i))),
+                        operators::LESS_EQUALS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if val <= *i))),
+                        operators::LESS => return Some(Box::new(move |v| matches!(v, Value::Int(i) if val < *i))),
+                        _ => {}
+                    }
+                }
+            }
+            None
+        }
+        // ── AND composition ──
         Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_AND && call.args.len() == 2 => {
             let a = try_compile_item_predicate(&call.args[0].expr, iter_var)?;
             let b = try_compile_item_predicate(&call.args[1].expr, iter_var)?;
             Some(Box::new(move |v| a(v) && b(v)))
         }
+        // ── OR composition ──
         Expr::Call(call) if call.func_name.as_str() == operators::LOGICAL_OR && call.args.len() == 2 => {
             let a = try_compile_item_predicate(&call.args[0].expr, iter_var)?;
             let b = try_compile_item_predicate(&call.args[1].expr, iter_var)?;
