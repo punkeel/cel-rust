@@ -3,9 +3,11 @@ use crate::common::ast::{Expr, LiteralValue};
 use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
 use crate::Expression;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct CompiledFilterTree {
     pub filter: Box<FilterNode>,
+    pub fast_eval: Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> bool>>,
     pub var_names: Vec<String>,
 }
 
@@ -26,6 +28,200 @@ impl CompiledFilterTree {
     }
 }
 
+/// Generate a closure-based fast evaluator for a compiled filter node.
+/// Returns `None` for expressions that can't use typed arrays (I64Expr, etc.).
+pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str>]) -> bool>> {
+    match node {
+        // ── Int comparisons ──
+        FilterNode::EqInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] == v))
+        }
+        FilterNode::NeInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] != v))
+        }
+        FilterNode::LtInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] < v))
+        }
+        FilterNode::LeInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] <= v))
+        }
+        FilterNode::GtInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] > v))
+        }
+        FilterNode::GeInt { idx, val } => {
+            let (i, v) = (*idx, *val);
+            Some(Box::new(move |ints, _| ints[i] >= v))
+        }
+
+        // ── Fused arithmetic + comparison ──
+        FilterNode::AddEq { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) == c))
+        }
+        FilterNode::AddNe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) != c))
+        }
+        FilterNode::AddLt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) < c))
+        }
+        FilterNode::AddLe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) <= c))
+        }
+        FilterNode::AddGt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) > c))
+        }
+        FilterNode::AddGe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_add(a) >= c))
+        }
+        FilterNode::SubEq { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) == c))
+        }
+        FilterNode::SubNe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) != c))
+        }
+        FilterNode::SubLt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) < c))
+        }
+        FilterNode::SubLe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) <= c))
+        }
+        FilterNode::SubGt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) > c))
+        }
+        FilterNode::SubGe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_sub(a) >= c))
+        }
+        FilterNode::MulEq { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) == c))
+        }
+        FilterNode::MulNe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) != c))
+        }
+        FilterNode::MulLt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) < c))
+        }
+        FilterNode::MulLe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) <= c))
+        }
+        FilterNode::MulGt { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) > c))
+        }
+        FilterNode::MulGe { idx, arith, cmp } => {
+            let (i, a, c) = (*idx, *arith, *cmp);
+            Some(Box::new(move |ints, _| ints[i].wrapping_mul(a) >= c))
+        }
+
+        // ── String comparison ──
+        FilterNode::EqStr { idx, val } => {
+            let i = *idx;
+            let v: Arc<str> = Arc::from(val.as_str());
+            Some(Box::new(move |_, strings| strings[i].as_ref() == v.as_ref()))
+        }
+
+        // ── Set membership: int ──
+        FilterNode::InIntLinear { idx, vals } => {
+            let i = *idx;
+            let v = vals.clone();
+            Some(Box::new(move |ints, _| v.contains(&ints[i])))
+        }
+        FilterNode::InIntHash { idx, set } => {
+            // Can't clone a HashSet cheaply — fall back
+            None
+        }
+
+        // ── Set membership: str ──
+        FilterNode::InStrLinear { idx, vals } => {
+            let i = *idx;
+            let v = vals.clone();
+            Some(Box::new(move |_, strings| {
+                let s: &str = strings[i].as_ref();
+                v.iter().any(|x| x == s)
+            }))
+        }
+        FilterNode::InStrHash { .. } => None,
+
+        // ── String methods ──
+        FilterNode::StartsWith { idx, prefix } => {
+            let i = *idx;
+            let p: Arc<str> = Arc::from(prefix.as_str());
+            Some(Box::new(move |_, strings| strings[i].starts_with(p.as_ref())))
+        }
+        FilterNode::EndsWith { idx, suffix } => {
+            let i = *idx;
+            let s: Arc<str> = Arc::from(suffix.as_str());
+            Some(Box::new(move |_, strings| strings[i].ends_with(s.as_ref())))
+        }
+        FilterNode::Contains { idx, substring } => {
+            let i = *idx;
+            let sub: Arc<str> = Arc::from(substring.as_str());
+            Some(Box::new(move |_, strings| strings[i].contains(sub.as_ref())))
+        }
+
+        // ── Multi-pattern contains ──
+        FilterNode::ContainsAny { idx, needles } => {
+            let i = *idx;
+            let n = needles.clone();
+            Some(Box::new(move |_, strings| {
+                let text: &str = strings[i].as_ref();
+                for needle in &n {
+                    if text.contains(needle.as_str()) {
+                        return true;
+                    }
+                }
+                false
+            }))
+        }
+        FilterNode::AhoContains { idx, ac, min } => {
+            let i = *idx;
+            let m = *min;
+            // AhoCorasick isn't Clone cheaply — fall back
+            None
+        }
+
+        // ── Logic combinators ──
+        FilterNode::And(a, b) => {
+            let a_fn = compile_closure(a)?;
+            let b_fn = compile_closure(b)?;
+            Some(Box::new(move |ints, strings| a_fn(ints, strings) && b_fn(ints, strings)))
+        }
+        FilterNode::Or(a, b) => {
+            let a_fn = compile_closure(a)?;
+            let b_fn = compile_closure(b)?;
+            Some(Box::new(move |ints, strings| a_fn(ints, strings) || b_fn(ints, strings)))
+        }
+        FilterNode::Not(inner) => {
+            let inner_fn = compile_closure(inner)?;
+            Some(Box::new(move |ints, strings| !inner_fn(ints, strings)))
+        }
+
+        // ── I64Expr — fall back to FilterNode ──
+        FilterNode::GeExpr { .. } | FilterNode::GtExpr { .. }
+        | FilterNode::LeExpr { .. } | FilterNode::LtExpr { .. }
+        | FilterNode::EqExpr { .. } | FilterNode::NeExpr { .. } => None,
+    }
+}
+
 /// Compile an expression to a filter tree, using a Schema's field ordering
 /// for variable index assignment instead of auto-assignment.
 ///
@@ -37,8 +233,10 @@ pub fn compile_filter_tree_with_schema(
 ) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::with_schema(field_names);
     let filter = compile_expr(&mut ctx, &expr.expr)?;
+    let fast_eval = compile_closure(&filter);
     Ok(CompiledFilterTree {
         filter,
+        fast_eval,
         var_names: ctx.var_names,
     })
 }
@@ -48,6 +246,7 @@ pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, Stri
     let filter = compile_expr(&mut ctx, &expr.expr)?;
     Ok(CompiledFilterTree {
         filter,
+        fast_eval: None,
         var_names: ctx.var_names,
     })
 }
