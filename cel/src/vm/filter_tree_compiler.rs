@@ -243,6 +243,16 @@ pub fn compile_closure(node: &FilterNode) -> Option<Box<dyn Fn(&[i64], &[Arc<str
             Some(Box::new(move |_, strings| strings[i].contains(sub.as_ref())))
         }
 
+        // ── Regex matches (pre-compiled regex captured in closure) ──
+        FilterNode::Matches { idx, regex } => {
+            let i = *idx;
+            // Regex was pre-compiled at compile time in try_compile_target_str_bool
+            // We need to move the regex out. Since FilterNode doesn't own it separately
+            // from the closure, we clone the hint. But regex::Regex is cheap to clone.
+            let re = regex.clone();
+            Some(Box::new(move |_, strings| re.is_match(strings[i].as_ref())))
+        }
+
         // ── Multi-pattern contains ──
         FilterNode::ContainsAny { idx, needles } => {
             let i = *idx;
@@ -825,6 +835,12 @@ fn try_compile_str_bool(
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
+        "matches" => {
+            match regex::Regex::new(&val) {
+                Ok(re) => Some(Box::new(FilterNode::Matches { idx, regex: re })),
+                Err(_) => None, // invalid regex → fall back to AST
+            }
+        }
         _ => None,
     }
 }
@@ -835,7 +851,7 @@ fn try_compile_target_str_bool(
     call: &crate::common::ast::CallExpr,
 ) -> Option<Box<FilterNode>> {
     let func = call.func_name.as_str();
-    if !matches!(func, "startsWith" | "endsWith" | "contains") {
+    if !matches!(func, "startsWith" | "endsWith" | "contains" | "matches") {
         return None;
     }
     let target_expr = call.target.as_ref()?;
@@ -853,6 +869,12 @@ fn try_compile_target_str_bool(
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
+        "matches" => {
+            match regex::Regex::new(&val) {
+                Ok(re) => Some(Box::new(FilterNode::Matches { idx, regex: re })),
+                Err(_) => None,
+            }
+        }
         _ => None,
     }
 }

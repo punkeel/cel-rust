@@ -257,6 +257,8 @@ pub enum FilterNode {
     StartsWith { idx: usize, prefix: String },
     EndsWith { idx: usize, suffix: String },
     Contains { idx: usize, substring: String },
+    /// Pre-compiled regex match. Regex is compiled at Filter::compile time.
+    Matches { idx: usize, regex: regex::Regex },
 
     // --- Multi-pattern contains ---
     ContainsAny { idx: usize, needles: Vec<String> },
@@ -425,6 +427,10 @@ impl FilterNode {
             },
             Self::Contains { idx, substring } => match &vars[*idx] {
                 Value::String(s) => s.contains(substring.as_str()),
+                _ => false,
+            },
+            Self::Matches { idx, regex } => match &vars[*idx] {
+                Value::String(s) => regex.is_match(s),
                 _ => false,
             },
 
@@ -726,6 +732,13 @@ impl FilterNode {
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
+            Self::Matches { idx, regex } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => regex.is_match(s),
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
 
             // ── Multi-pattern contains ──
             Self::ContainsAny { idx, needles } => {
@@ -885,6 +898,9 @@ impl FilterNode {
             }
             Self::Contains { idx, substring } => {
                 strings.get_unchecked(*idx).contains(substring.as_str())
+            }
+            Self::Matches { idx, regex } => {
+                regex.is_match(strings.get_unchecked(*idx).as_ref())
             }
 
             // ── Multi-pattern contains ──
