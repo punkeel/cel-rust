@@ -197,6 +197,8 @@ impl Program {
 
     /// Evaluate the expression using the AST interpreter.
     /// Always correct — uses the original AST walking logic.
+    /// For maximum performance on filter-like expressions,
+    /// use [`execute_fast`] instead, which uses the compiled closure.
     pub fn execute(&self, context: &Context) -> ResolveResult {
         Value::resolve(&self.expression, context)
     }
@@ -205,6 +207,7 @@ impl Program {
     /// ~1–6 ns for filter-like boolean expressions via filter tree.
     /// ~50–200 ns for general expressions via compiled closure.
     /// NEVER falls back to the slow AST interpreter.
+    /// This is the recommended method for filtering workloads.
     pub fn execute_fast(&self, context: &Context) -> ResolveResult {
         if let Some(ref tree) = self.tree {
             let (ints, strings) = tree.bind_typed(context);
