@@ -1,6 +1,6 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{CompiledNode, EvalView, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
+use crate::vm::filter_tree::{AhoData, CompiledNode, ContainsAnyData, CmpOp, EvalView, FilterNode, I64Expr, IntArithOp, IntOp, ItemPredicate, ListExpr, RegexData, StrExpr};
 use crate::objects::Value;
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
@@ -584,18 +584,18 @@ fn try_compile_ac_or(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<FilterNode>
 
     // For very small pattern counts on short strings, naive search wins over AC.
     if patterns.len() <= 4 {
-        return Some(Box::new(FilterNode::ContainsAny {
+        return Some(Box::new(FilterNode::ContainsAny(Box::new(ContainsAnyData {
             idx,
             needles: patterns,
-        }));
+        }))));
     }
 
     let automaton = aho_corasick::AhoCorasick::new(&patterns).ok()?;
-    Some(Box::new(FilterNode::AhoContains {
+    Some(Box::new(FilterNode::AhoContains(Box::new(AhoData {
         idx,
         ac: automaton,
         min: 1,
-    }))
+    }))))
 }
 
 /// Recursively collect all `.contains(literal)` from an OR tree.
@@ -640,11 +640,11 @@ fn try_compile_ac_and(ctx: &mut FilterCtx, expr: &Expr) -> Option<Box<FilterNode
     let var_name = var_name?;
     let idx = ctx.var_idx(&var_name);
     let automaton = aho_corasick::AhoCorasick::new(&patterns).ok()?;
-    Some(Box::new(FilterNode::AhoContains {
+    Some(Box::new(FilterNode::AhoContains(Box::new(AhoData {
         idx,
         ac: automaton,
         min: patterns.len(),
-    }))
+    }))))
 }
 
 /// Recursively collect all `.contains(literal)` from an AND tree.
@@ -722,12 +722,12 @@ fn try_compile_int_cmp(
 
     if let Some((idx, val)) = try_var_lit(ctx, left, right) {
         return Some(match op {
-            operators::EQUALS => Box::new(FilterNode::EqInt { idx, val }),
-            operators::NOT_EQUALS => Box::new(FilterNode::NeInt { idx, val }),
-            operators::LESS => Box::new(FilterNode::LtInt { idx, val }),
-            operators::LESS_EQUALS => Box::new(FilterNode::LeInt { idx, val }),
-            operators::GREATER => Box::new(FilterNode::GtInt { idx, val }),
-            operators::GREATER_EQUALS => Box::new(FilterNode::GeInt { idx, val }),
+            operators::EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Eq, idx, val }),
+            operators::NOT_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Ne, idx, val }),
+            operators::LESS => Box::new(FilterNode::IntCmp { op: IntOp::Lt, idx, val }),
+            operators::LESS_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Le, idx, val }),
+            operators::GREATER => Box::new(FilterNode::IntCmp { op: IntOp::Gt, idx, val }),
+            operators::GREATER_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Ge, idx, val }),
             _ => return None,
         });
     }
@@ -736,12 +736,12 @@ fn try_compile_int_cmp(
     if let Some((idx, val)) = try_var_lit(ctx, right, left) {
         // Swap operator: 80 == port  =>  port == 80
         return Some(match op {
-            operators::EQUALS => Box::new(FilterNode::EqInt { idx, val }),
-            operators::NOT_EQUALS => Box::new(FilterNode::NeInt { idx, val }),
-            operators::LESS => Box::new(FilterNode::GtInt { idx, val }), // 80 < port => port > 80
-            operators::LESS_EQUALS => Box::new(FilterNode::GeInt { idx, val }), // 80 <= port => port >= 80
-            operators::GREATER => Box::new(FilterNode::LtInt { idx, val }), // 80 > port => port < 80
-            operators::GREATER_EQUALS => Box::new(FilterNode::LeInt { idx, val }), // 80 >= port => port <= 80
+            operators::EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Eq, idx, val }),
+            operators::NOT_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Ne, idx, val }),
+            operators::LESS => Box::new(FilterNode::IntCmp { op: IntOp::Gt, idx, val }), // 80 < port => port > 80
+            operators::LESS_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Ge, idx, val }), // 80 <= port => port >= 80
+            operators::GREATER => Box::new(FilterNode::IntCmp { op: IntOp::Lt, idx, val }), // 80 > port => port < 80
+            operators::GREATER_EQUALS => Box::new(FilterNode::IntCmp { op: IntOp::Le, idx, val }), // 80 >= port => port <= 80
             _ => return None,
         });
     }
@@ -780,42 +780,42 @@ fn try_compile_int_cmp(
         // Try var op lit and lit op var patterns for the arithmetic
         if let Some((idx, arith)) = var_idx(&call.args[0].expr).zip(lit_val(&call.args[1].expr)) {
             return Some(match (name, op) {
-                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::AddEq { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::AddNe { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS) => Box::new(FilterNode::AddLt { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::AddLe { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER) => Box::new(FilterNode::AddGt { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::AddGe { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::SubEq { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::SubNe { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::SubLt { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::SubLe { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::SubGt { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::SubGe { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::EQUALS) => Box::new(FilterNode::MulEq { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::NOT_EQUALS) => Box::new(FilterNode::MulNe { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::LESS) => Box::new(FilterNode::MulLt { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::LESS_EQUALS) => Box::new(FilterNode::MulLe { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::GREATER) => Box::new(FilterNode::MulGt { idx, arith, cmp: cmp_val }),
-                (operators::MULTIPLY, operators::GREATER_EQUALS) => Box::new(FilterNode::MulGe { idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddEq, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddNe, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddLt, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddLe, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER) => Box::new(FilterNode::IntArith { op: IntArithOp::AddGt, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddGe, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubEq, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubNe, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubLt, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubLe, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::IntArith { op: IntArithOp::SubGt, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubGe, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::MulEq, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::NOT_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::MulNe, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::LESS) => Box::new(FilterNode::IntArith { op: IntArithOp::MulLt, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::LESS_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::MulLe, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::GREATER) => Box::new(FilterNode::IntArith { op: IntArithOp::MulGt, idx, arith, cmp: cmp_val }),
+                (operators::MULTIPLY, operators::GREATER_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::MulGe, idx, arith, cmp: cmp_val }),
                 _ => return None,
             });
         }
         // lit op var (e.g. 100 + port == 1024)
         if let Some((arith, idx)) = lit_val(&call.args[0].expr).zip(var_idx(&call.args[1].expr)) {
             return Some(match (name, op) {
-                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::AddEq { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::AddNe { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::LESS) => Box::new(FilterNode::AddGt { idx, arith, cmp: cmp_val }), // swapped: lit < var+arith => var+arith > lit
-                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::AddGe { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER) => Box::new(FilterNode::AddLt { idx, arith, cmp: cmp_val }),
-                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::AddLe { idx, arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::SubEq { idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::SubNe { idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::SubGt { idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::SubGe { idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::SubLt { idx, arith: -arith, cmp: cmp_val }),
-                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::SubLe { idx, arith: -arith, cmp: cmp_val }),
+                (operators::ADD, operators::EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddEq, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::NOT_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddNe, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::LESS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddGt, idx, arith, cmp: cmp_val }), // swapped: lit < var+arith => var+arith > lit
+                (operators::ADD, operators::LESS_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddGe, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER) => Box::new(FilterNode::IntArith { op: IntArithOp::AddLt, idx, arith, cmp: cmp_val }),
+                (operators::ADD, operators::GREATER_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::AddLe, idx, arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubEq, idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::NOT_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubNe, idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubGt, idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::LESS_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubGe, idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER) => Box::new(FilterNode::IntArith { op: IntArithOp::SubLt, idx, arith: -arith, cmp: cmp_val }),
+                (operators::SUBSTRACT, operators::GREATER_EQUALS) => Box::new(FilterNode::IntArith { op: IntArithOp::SubLe, idx, arith: -arith, cmp: cmp_val }),
                 _ => return None,
             });
         }
@@ -833,12 +833,12 @@ fn try_compile_int_cmp(
     let left_expr = try_compile_i64_expr(ctx, left)?;
     let right_expr = try_compile_i64_expr(ctx, right)?;
     let f: Box<FilterNode> = match op {
-        operators::EQUALS => Box::new(FilterNode::EqExpr { left: left_expr, right: right_expr }),
-        operators::NOT_EQUALS => Box::new(FilterNode::NeExpr { left: left_expr, right: right_expr }),
-        operators::LESS => Box::new(FilterNode::LtExpr { left: left_expr, right: right_expr }),
-        operators::LESS_EQUALS => Box::new(FilterNode::LeExpr { left: left_expr, right: right_expr }),
-        operators::GREATER => Box::new(FilterNode::GtExpr { left: left_expr, right: right_expr }),
-        operators::GREATER_EQUALS => Box::new(FilterNode::GeExpr { left: left_expr, right: right_expr }),
+        operators::EQUALS => Box::new(FilterNode::I64Cmp { op: CmpOp::Eq, left: Box::new(left_expr), right: Box::new(right_expr) }),
+        operators::NOT_EQUALS => Box::new(FilterNode::I64Cmp { op: CmpOp::Ne, left: Box::new(left_expr), right: Box::new(right_expr) }),
+        operators::LESS => Box::new(FilterNode::I64Cmp { op: CmpOp::Lt, left: Box::new(left_expr), right: Box::new(right_expr) }),
+        operators::LESS_EQUALS => Box::new(FilterNode::I64Cmp { op: CmpOp::Le, left: Box::new(left_expr), right: Box::new(right_expr) }),
+        operators::GREATER => Box::new(FilterNode::I64Cmp { op: CmpOp::Gt, left: Box::new(left_expr), right: Box::new(right_expr) }),
+        operators::GREATER_EQUALS => Box::new(FilterNode::I64Cmp { op: CmpOp::Ge, left: Box::new(left_expr), right: Box::new(right_expr) }),
         _ => return None,
     };
     Some(f)
@@ -924,8 +924,8 @@ fn try_compile_str_cmp(
     };
     let idx = ctx.var_idx(var_name);
     match op {
-        operators::EQUALS => Some(Box::new(FilterNode::EqStr { idx, val })),
-        operators::NOT_EQUALS => Some(Box::new(FilterNode::NeStr { idx, val })),
+        operators::EQUALS => Some(Box::new(FilterNode::StrEq { idx, neg: false, val })),
+        operators::NOT_EQUALS => Some(Box::new(FilterNode::StrEq { idx, neg: true, val })),
         _ => None,
     }
 }
@@ -951,7 +951,7 @@ fn try_compile_str_bool(
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
         "matches" => {
             match regex::Regex::new(&val) {
-                Ok(re) => Some(Box::new(FilterNode::Matches { idx, regex: re })),
+                Ok(re) => Some(Box::new(FilterNode::Matches(Box::new(RegexData { idx, regex: re })))),
                 Err(_) => None, // invalid regex → fall back to AST
             }
         }
@@ -985,7 +985,7 @@ fn try_compile_target_str_bool(
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
         "matches" => {
             match regex::Regex::new(&val) {
-                Ok(re) => Some(Box::new(FilterNode::Matches { idx, regex: re })),
+                Ok(re) => Some(Box::new(FilterNode::Matches(Box::new(RegexData { idx, regex: re })))),
                 Err(_) => None,
             }
         }
@@ -1020,10 +1020,10 @@ fn try_compile_in_set(
     }
     if ints.len() == list.len() {
         if ints.len() <= 16 {
-            return Some(Box::new(FilterNode::InIntLinear { idx, vals: ints }));
+            return Some(Box::new(FilterNode::InIntSet { idx, vals: ints }));
         }
         let set: std::collections::HashSet<i64> = ints.into_iter().collect();
-        return Some(Box::new(FilterNode::InIntHash { idx, set }));
+        return Some(Box::new(FilterNode::InIntSet { idx, vals: set.into_iter().collect() }));
     }
 
     // Try all-string
@@ -1038,10 +1038,10 @@ fn try_compile_in_set(
     }
     if strs.len() == list.len() {
         if strs.len() <= 16 {
-            return Some(Box::new(FilterNode::InStrLinear { idx, vals: strs }));
+            return Some(Box::new(FilterNode::InStrSet { idx, vals: strs }));
         }
         let set: std::collections::HashSet<String> = strs.into_iter().collect();
-        return Some(Box::new(FilterNode::InStrHash { idx, set }));
+        return Some(Box::new(FilterNode::InStrSet { idx, vals: set.into_iter().collect() }));
     }
 
     None
