@@ -1,5 +1,5 @@
 use crate::common::{
-    ast::{CallExpr, EntryExpr, Expr, IdedExpr},
+    ast::{EntryExpr, Expr, IdedExpr},
     decls::FunctionDecl,
     types::{Kind, Type},
     value::Val,
@@ -39,7 +39,6 @@ impl FunctionHandle {
 
 /// Information needed to resolve a function call at parse/compile time.
 pub struct FunctionResolver<'a> {
-    env: &'a Env,
     name_to_id: std::collections::BTreeMap<String, u16>,
     functions: Vec<&'a FunctionDecl>,
 }
@@ -47,7 +46,6 @@ pub struct FunctionResolver<'a> {
 impl<'a> FunctionResolver<'a> {
     pub fn new(env: &'a Env) -> Self {
         // Build flat index from env's BTreeMap.
-        // We iterate in order so the IDs are deterministic.
         let mut name_to_id = std::collections::BTreeMap::new();
         let mut functions = Vec::new();
         for (name, decl) in env.functions() {
@@ -56,7 +54,6 @@ impl<'a> FunctionResolver<'a> {
             functions.push(decl);
         }
         Self {
-            env,
             name_to_id,
             functions,
         }

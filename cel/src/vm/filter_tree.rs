@@ -76,6 +76,33 @@ impl I64Expr {
             Self::ListLen(a) => a.len_unchecked(vars) as i64,
         }
     }
+
+    /// Fast eval using typed arrays — no Value enum access.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`eval_fast`], but reads from pre-extracted typed arrays.
+    #[inline(always)]
+    pub unsafe fn eval_fast_typed(&self, ints: &[i64], strings: &[std::sync::Arc<str>]) -> i64 {
+        match self {
+            Self::Literal(v) => *v,
+            Self::Var(idx) => *ints.get_unchecked(*idx),
+            Self::Add(a, b) => a.eval_fast_typed(ints, strings).wrapping_add(b.eval_fast_typed(ints, strings)),
+            Self::Sub(a, b) => a.eval_fast_typed(ints, strings).wrapping_sub(b.eval_fast_typed(ints, strings)),
+            Self::Mul(a, b) => a.eval_fast_typed(ints, strings).wrapping_mul(b.eval_fast_typed(ints, strings)),
+            Self::Div(a, b) => {
+                let bv = b.eval_fast_typed(ints, strings);
+                if bv == 0 { 0 } else { a.eval_fast_typed(ints, strings).wrapping_div(bv) }
+            }
+            Self::Mod(a, b) => {
+                let bv = b.eval_fast_typed(ints, strings);
+                if bv == 0 { 0 } else { a.eval_fast_typed(ints, strings).wrapping_rem(bv) }
+            }
+            Self::Neg(a) => a.eval_fast_typed(ints, strings).wrapping_neg(),
+            Self::StrLen(s) => s.len_typed(strings) as i64,
+            Self::ListLen(_) => 0, // List length not available from typed arrays
+        }
+    }
 }
 
 /// A typed string expression that evaluates directly to `&str` (via reference to var storage).
@@ -149,6 +176,20 @@ impl StrExpr {
                 }
             }
             Self::Concat(a, b) => a.len_unchecked(vars) + b.len_unchecked(vars),
+        }
+    }
+
+    /// Fast length from typed string array — no Value enum access.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`len_unchecked`], but reads from pre-extracted `Arc<str>` array.
+    #[inline(always)]
+    pub unsafe fn len_typed(&self, strings: &[std::sync::Arc<str>]) -> usize {
+        match self {
+            Self::Literal(s) => s.len(),
+            Self::Var(idx) => strings.get_unchecked(*idx).len(),
+            Self::Concat(a, b) => a.len_typed(strings) + b.len_typed(strings),
         }
     }
 }
@@ -244,6 +285,7 @@ pub enum FilterNode {
 
     // --- String comparison ---
     EqStr { idx: usize, val: String },
+    NeStr { idx: usize, val: String },
 
     // --- Set membership: int ---
     InIntLinear { idx: usize, vals: Vec<i64> },
@@ -393,6 +435,10 @@ impl FilterNode {
             // ── String comparison ──
             Self::EqStr { idx, val } => match &vars[*idx] {
                 Value::String(s) => &**s == val,
+                _ => false,
+            },
+            Self::NeStr { idx, val } => match &vars[*idx] {
+                Value::String(s) => &**s != val,
                 _ => false,
             },
 
@@ -677,6 +723,13 @@ impl FilterNode {
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
+            Self::NeStr { idx, val } => {
+                let v = vars.get_unchecked(*idx);
+                match v {
+                    Value::String(s) => &**s != val,
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
 
             // ── Set membership: int ──
             Self::InIntLinear { idx, vals } => {
@@ -874,6 +927,7 @@ impl FilterNode {
 
             // ── String comparison (direct Arc<str> access) ──
             Self::EqStr { idx, val } => strings.get_unchecked(*idx).as_ref() == val.as_str(),
+            Self::NeStr { idx, val } => strings.get_unchecked(*idx).as_ref() != val.as_str(),
 
             // ── Set membership: int ──
             Self::InIntLinear { idx, vals } => vals.contains(ints.get_unchecked(*idx)),
@@ -931,22 +985,83 @@ impl FilterNode {
                 false
             }
 
-            // ── I64Expr / other — fall back to vars path ──
-            Self::GeExpr { .. }
-            | Self::GtExpr { .. }
-            | Self::LeExpr { .. }
-            | Self::LtExpr { .. }
-            | Self::EqExpr { .. }
-            | Self::NeExpr { .. } => {
-                // These use I64Expr which needs the full Value enum
-                // This path is rarely hit for Schema-compiled expressions
-                core::hint::unreachable_unchecked()
-            }
+            // ── I64Expr comparisons (using typed eval) ──
+            Self::GeExpr { left, right } => left.eval_fast_typed(ints, strings) >= right.eval_fast_typed(ints, strings),
+            Self::GtExpr { left, right } => left.eval_fast_typed(ints, strings) > right.eval_fast_typed(ints, strings),
+            Self::LeExpr { left, right } => left.eval_fast_typed(ints, strings) <= right.eval_fast_typed(ints, strings),
+            Self::LtExpr { left, right } => left.eval_fast_typed(ints, strings) < right.eval_fast_typed(ints, strings),
+            Self::EqExpr { left, right } => left.eval_fast_typed(ints, strings) == right.eval_fast_typed(ints, strings),
+            Self::NeExpr { left, right } => left.eval_fast_typed(ints, strings) != right.eval_fast_typed(ints, strings),
 
             // ── Logic combinators (recursively call eval_fast_typed) ──
             Self::And(a, b) => a.eval_fast_typed(ints, strings) && b.eval_fast_typed(ints, strings),
             Self::Or(a, b) => a.eval_fast_typed(ints, strings) || b.eval_fast_typed(ints, strings),
             Self::Not(inner) => !inner.eval_fast_typed(ints, strings),
+        }
+    }
+
+    /// Estimate the relative evaluation cost of this node.
+    /// Higher = more expensive. Used to reorder AND/OR for optimal short-circuit.
+    pub fn cost(&self) -> u8 {
+        match self {
+            // Tier 1: dirt cheap (int register read + compare)
+            Self::EqInt { .. } | Self::NeInt { .. } => 1,
+            Self::LtInt { .. } | Self::LeInt { .. } => 1,
+            Self::GtInt { .. } | Self::GeInt { .. } => 1,
+            Self::AddEq { .. } | Self::AddNe { .. } => 1,
+            Self::AddLt { .. } | Self::AddLe { .. } => 1,
+            Self::AddGt { .. } | Self::AddGe { .. } => 1,
+            Self::SubEq { .. } | Self::SubNe { .. } => 1,
+            Self::SubLt { .. } | Self::SubLe { .. } => 1,
+            Self::SubGt { .. } | Self::SubGe { .. } => 1,
+            Self::MulEq { .. } | Self::MulNe { .. } => 1,
+            Self::MulLt { .. } | Self::MulLe { .. } => 1,
+            Self::MulGt { .. } | Self::MulGe { .. } => 1,
+            // I64Expr comparisons — still cheap, slight arithmetic overhead
+            Self::GeExpr { .. } | Self::GtExpr { .. } => 2,
+            Self::LeExpr { .. } | Self::LtExpr { .. } => 2,
+            Self::EqExpr { .. } | Self::NeExpr { .. } => 2,
+
+            // Tier 2: cheap (string compare, small set scan)
+            Self::EqStr { .. } | Self::NeStr { .. } => 5,
+            Self::InIntLinear { .. } => 8,
+            Self::InIntHash { .. } => 4,
+            Self::InStrLinear { .. } => 15,
+            Self::InStrHash { .. } => 8,
+
+            // Tier 3: medium (string prefix/suffix scan)
+            Self::StartsWith { .. } | Self::EndsWith { .. } => 8,
+            Self::Contains { .. } => 15,
+
+            // Tier 4: expensive
+            Self::Matches { .. } => 50,
+            Self::ContainsAny { .. } => 35,
+            Self::AhoContains { .. } => 40,
+
+            // Recursive: sum of children
+            Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),
+            Self::Not(inner) => inner.cost(),
+        }
+    }
+
+    /// Reorder AND/OR branches so cheaper expression evaluates first.
+    /// Maximizes short-circuit benefit: AND skips right if left is false,
+    /// OR skips right if left is true — so the cheap check should go first.
+    pub fn optimize_order(&mut self) {
+        match self {
+            Self::And(ref mut a, ref mut b) | Self::Or(ref mut a, ref mut b) => {
+                // Recurse first
+                a.optimize_order();
+                b.optimize_order();
+                // Then swap if right is cheaper than left
+                if a.cost() > b.cost() {
+                    std::mem::swap(a, b);
+                }
+            }
+            Self::Not(ref mut inner) => {
+                inner.optimize_order();
+            }
+            _ => {}
         }
     }
 }
@@ -994,9 +1109,7 @@ impl SmartBatch {
         let mut with_cost: Vec<_> = filters
             .into_iter()
             .map(|(f, name)| {
-                // rough cost: 1 for int eq, 2 for str eq, 5 for contains, etc.
-                // We could make this richer with a cost() method.
-                let cost = 1u8;
+                let cost = f.cost();
                 (f, name, cost)
             })
             .collect();

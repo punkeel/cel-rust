@@ -210,7 +210,6 @@ impl EvalContext {
     #[inline]
     pub fn set_i64(&mut self, field: Field, val: i64) {
         let idx = field.0 as usize;
-        self.values[idx] = Value::Int(val);
         self.ints[idx] = val;
     }
 
@@ -239,7 +238,6 @@ impl EvalContext {
     pub fn set_str(&mut self, field: Field, val: &str) {
         let idx = field.0 as usize;
         let arc = self.intern(val);
-        self.values[idx] = Value::String(Arc::clone(&arc));
         self.strings[idx] = arc;
     }
 
@@ -249,7 +247,6 @@ impl EvalContext {
     pub fn set_string(&mut self, field: Field, val: String) {
         let idx = field.0 as usize;
         let arc = self.intern(val.as_str());
-        self.values[idx] = Value::String(Arc::clone(&arc));
         self.strings[idx] = arc;
     }
 
@@ -277,6 +274,18 @@ impl EvalContext {
     #[inline]
     pub fn as_slice(&self) -> &[Value] {
         &self.values
+    }
+
+    /// Immutable access to the internal value array (used by closure_compiler).
+    #[inline]
+    pub(crate) fn values(&self) -> &[Value] {
+        &self.values
+    }
+
+    /// Mutable access to the internal value array (used by closure_compiler).
+    #[inline]
+    pub(crate) fn values_mut(&mut self) -> &mut [Value] {
+        &mut self.values
     }
 
     /// Fast-access: read i64 value directly (no enum match).
@@ -336,24 +345,17 @@ impl std::fmt::Debug for EvalContext {
 /// compile time. Each [`Filter::eval`] call is a flat array traversal
 /// in the compiled filter tree — ~1–6 ns depending on pattern complexity.
 ///
-/// If an expression cannot be compiled to the filter tree (e.g., it's
-/// non-boolean or uses unsupported patterns like comprehensions), eval
-/// automatically falls back to the AST interpreter. This is transparent
-/// to the caller and only ~50× slower (still only ~200 ns).
+/// Every expression is compiled to the filter tree at construction time.
+/// If compilation fails, [`Filter::compile`] returns an error — no
+/// silent AST fallback.
 pub struct Filter {
-    tree: Option<CompiledFilterTree>,
-    expression: Expression,
-    var_names: Vec<String>,
-    /// Schema field index for each variable in `var_names`.
-    /// Used by the AST fallback path to correctly index into `EvalContext.as_slice()`.
-    var_indices: Vec<usize>,
+    tree: CompiledFilterTree,
 }
 
 impl std::fmt::Debug for Filter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Filter")
-            .field("var_names", &self.var_names)
-            .field("var_indices", &self.var_indices)
+            .field("var_names", &self.tree.var_names)
             .finish()
     }
 }
@@ -362,7 +364,7 @@ impl Filter {
     /// Parse and compile a CEL expression against a [`Schema`].
     ///
     /// Field names are resolved to [`Schema`] indices at compile time.
-    /// Returns an error if parsing fails.
+    /// Returns an error if parsing or compilation fails.
     pub fn compile(source: &str, schema: &Schema) -> Result<Self, String> {
         let parser = crate::parser::Parser::default();
         let expression = parser.parse(source).map_err(|e| format!("{}", e))?;
@@ -370,147 +372,38 @@ impl Filter {
     }
 
     /// Create a Filter from a pre-parsed Expression.
+    ///
+    /// Returns an error if the expression cannot be compiled to the
+    /// filter tree. No silent AST fallback.
     pub fn from_expression(expression: Expression, schema: &Schema) -> Result<Self, String> {
         let field_names: Vec<&str> = schema.field_names();
         let tree = filter_tree_compiler::compile_filter_tree_with_schema(
             &expression,
             &field_names,
-        )
-        .ok();
-
-        let (var_names, var_indices) = match &tree {
-            Some(t) => {
-                // When the tree compiled, var_names are in schema order (0..N).
-                let indices: Vec<usize> = (0..t.var_names.len()).collect();
-                (t.var_names.clone(), indices)
-            }
-            None => {
-                let names: Vec<String> = expression
-                    .references()
-                    .variables()
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                // Resolve each name through the schema to get its field index.
-                // This is essential for the AST fallback path to correctly
-                // index into EvalContext.as_slice().
-                let indices: Vec<usize> = names
-                    .iter()
-                    .map(|n| schema.get_field(n).map(|f| f.index()).unwrap_or(0))
-                    .collect();
-                (names, indices)
-            }
-        };
-
-        Ok(Filter {
-            tree,
-            expression,
-            var_names,
-            var_indices,
-        })
+        )?;
+        Ok(Filter { tree })
     }
 
     /// Evaluate the expression against a set of runtime values.
     ///
-    /// If the expression was compiled to a filter tree, this runs in
-    /// ~1–6 ns per call — just array reads. Otherwise it falls back
-    /// transparently to the AST interpreter (~200 ns).
+    /// Runs in ~1–6 ns per call — just array reads in the compiled
+    /// filter tree. Returns an error only on execution failure (e.g.
+    /// type mismatch), which should not happen when the Schema is
+    /// correctly used.
     #[inline(always)]
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, ExecutionError> {
-        if self.tree.is_some() {
-            Ok(self.eval_bool(ctx))
-        } else {
-            let mut map_ctx = crate::Context::default();
-            for (name, &idx) in self.var_names.iter().zip(self.var_indices.iter()) {
-                map_ctx.add_variable_from_value(name, ctx.as_slice()[idx].clone());
-            }
-            match Value::resolve(&self.expression, &map_ctx) {
-                Ok(Value::Bool(b)) => Ok(b),
-                Ok(_) => Ok(false),
-                Err(e) => Err(e),
-            }
-        }
+        Ok(self.eval_bool(ctx))
     }
 
-    /// Evaluate and return a `bool` directly, without Result wrapping.
-    ///
-    /// Same as [`eval`] but skips the `Result` allocation. Panics if
-    /// the filter tree was not compiled (use [`eval`] for fallback).
+    /// Evaluate and return a `bool` directly.
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        let tree = self.tree.as_ref().unwrap();
-        // Safety: Schema guarantees all field indices are in-bounds,
-        // all value types match, and typed arrays are populated.
-        unsafe {
-            if let Some(fast) = &tree.fast_eval {
-                fast(ctx.ints(), ctx.strings())
-            } else {
-                tree.filter.eval_fast(ctx.as_slice())
-            }
-        }
+        self.tree.compiled.eval_bool(ctx.ints(), ctx.strings())
     }
 
     /// Variable names referenced by this filter, in index order.
     /// Matches the schema indices used during compilation.
     pub fn variables(&self) -> &[String] {
-        &self.var_names
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The AST fallback path in Filter::eval() was incorrectly zipping
-    /// expression-order variable names with schema-order values, causing
-    /// field/value mismatches when the expression referenced fields out of
-    /// schema order.
-    #[test]
-    fn test_eval_ast_fallback_respects_schema_indices() {
-        let mut schema = Schema::new();
-        let _flag = schema.add_field("flag", FieldType::Bool);
-        let port = schema.add_field("port", FieldType::Int);
-        let method = schema.add_field("method", FieldType::String);
-
-        // Ternary is not supported by the filter tree compiler, forcing AST fallback.
-        let filter = Filter::compile("method == 'GET' ? port == 80 : true", &schema).unwrap();
-
-        // Verify it indeed fell back (no filter tree compiled).
-        assert!(filter.tree.is_none(), "expected AST fallback for ternary expr");
-
-        let mut ctx = EvalContext::new(&schema);
-        ctx.set_bool(_flag, false); // flag (index 0) — not referenced
-        ctx.set_i64(port, 80);    // port (index 1)
-        ctx.set_str(method, "GET"); // method (index 2)
-
-        // method == "GET" → true → evaluate `port == 80` → true
-        assert_eq!(filter.eval(&ctx).unwrap(), true);
-
-        // Change port so the result should be false
-        ctx.set_i64(port, 8080);
-        assert_eq!(filter.eval(&ctx).unwrap(), false);
-
-        // Change method so the ternary takes the else branch → true
-        ctx.set_i64(port, 80);
-        ctx.set_str(method, "POST");
-        assert_eq!(filter.eval(&ctx).unwrap(), true);
-    }
-
-    /// The tree path should still work correctly regardless of field order.
-    #[test]
-    fn test_eval_tree_path_respects_schema_indices() {
-        let mut schema = Schema::new();
-        let _flag = schema.add_field("flag", FieldType::Bool);
-        let port = schema.add_field("port", FieldType::Int);
-
-        // Simple comparison — always compiles to a filter tree.
-        let filter = Filter::compile("port == 80", &schema).unwrap();
-        assert!(filter.tree.is_some(), "expected filter tree for simple cmp");
-
-        let mut ctx = EvalContext::new(&schema);
-        ctx.set_bool(_flag, false); // flag (index 0)
-        ctx.set_i64(port, 80);   // port (index 1)
-
-        assert_eq!(filter.eval(&ctx).unwrap(), true);
+        &self.tree.var_names
     }
 }

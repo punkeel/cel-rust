@@ -250,10 +250,8 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         return Ok(Value::Bool(true));
                     }
                     let r = right(ctx)?;
-                    if let Value::Bool(false) = r {
-                        return Ok(Value::Bool(false));
-                    }
                     match (l, r) {
+                        (Value::Bool(false), Value::Bool(b)) => Ok(Value::Bool(b)),
                         (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
                         _ => Err(ExecutionError::NoSuchOverload),
                     }
@@ -268,10 +266,8 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         return Ok(Value::Bool(false));
                     }
                     let r = right(ctx)?;
-                    if let Value::Bool(true) = r {
-                        return Ok(Value::Bool(true));
-                    }
                     match (l, r) {
+                        (Value::Bool(true), Value::Bool(b)) => Ok(Value::Bool(b)),
                         (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
                         _ => Err(ExecutionError::NoSuchOverload),
                     }
