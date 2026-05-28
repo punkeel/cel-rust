@@ -566,6 +566,58 @@ impl FilterCtx {
     }
 }
 
+fn flatten_ident(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(name) => Some(name.clone()),
+        Expr::Select(sel) => {
+            let prefix = flatten_ident(&sel.operand.expr)?;
+            Some(format!("{}.{}", prefix, sel.field))
+        }
+        _ => None,
+    }
+}
+
+fn resolve_var(ctx: &mut FilterCtx, expr: &Expr) -> Option<usize> {
+    match expr {
+        Expr::Ident(name) => Some(ctx.var_idx(name)),
+        Expr::Select(sel) => {
+            let dotted = flatten_ident(expr)?;
+            if ctx.var_map.contains_key(&dotted) {
+                Some(ctx.var_idx(&dotted))
+            } else if let Some(bare) = dotted.rsplit('.').next() {
+                if ctx.var_map.contains_key(bare) {
+                    Some(ctx.var_idx(bare))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Expr::Call(call) if call.func_name.as_str() == operators::INDEX && call.args.len() == 1 => {
+            let target = call.target.as_ref()?;
+            let key = match &call.args[0].expr {
+                Expr::Literal(LiteralValue::String(s)) => s.inner(),
+                _ => return None,
+            };
+            let prefix = flatten_ident(&target.expr)?;
+            let dotted = format!("{}.{}", prefix, key);
+            if ctx.var_map.contains_key(&dotted) {
+                Some(ctx.var_idx(&dotted))
+            } else if let Some(bare) = dotted.rsplit('.').next() {
+                if ctx.var_map.contains_key(bare) {
+                    Some(ctx.var_idx(bare))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, String> {
     match expr {
         Expr::Call(call) => {
@@ -775,15 +827,12 @@ fn try_compile_int_cmp(
 ) -> Option<Box<FilterNode>> {
     // Fast path: var op literal  (e.g. port == 80)
     fn try_var_lit(ctx: &mut FilterCtx, var_expr: &Expr, lit_expr: &Expr) -> Option<(usize, i64)> {
-        let name = match var_expr {
-            Expr::Ident(name) => name,
-            _ => return None,
-        };
+        let idx = resolve_var(ctx, var_expr)?;
         let val = match lit_expr {
             Expr::Literal(LiteralValue::Int(i)) => *i.inner(),
             _ => return None,
         };
-        Some((ctx.var_idx(name), val))
+        Some((idx, val))
     }
 
     if let Some((idx, val)) = try_var_lit(ctx, left, right) {
@@ -979,23 +1028,25 @@ fn try_compile_str_cmp(
     left: &Expr,
     right: &Expr,
 ) -> Option<Box<FilterNode>> {
-    let (var_name, val) = match (left, right) {
-        (Expr::Ident(name), Expr::Literal(LiteralValue::String(s))) => {
-            (name, s.inner().to_string())
-        }
-        (Expr::Literal(LiteralValue::String(s)), Expr::Ident(name)) => {
-            (name, s.inner().to_string())
-        }
-        _ => return None,
-    };
     if op != operators::EQUALS && op != operators::NOT_EQUALS {
         return None;
     }
-    let idx = ctx.var_idx(var_name);
+    let (idx, val) = if let Some(idx) = resolve_var(ctx, left) {
+        match right {
+            Expr::Literal(LiteralValue::String(s)) => (idx, s.inner().to_string()),
+            _ => return None,
+        }
+    } else if let Some(idx) = resolve_var(ctx, right) {
+        match left {
+            Expr::Literal(LiteralValue::String(s)) => (idx, s.inner().to_string()),
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
     match op {
         operators::EQUALS => Some(Box::new(FilterNode::EqStr { idx, val })),
-        operators::NOT_EQUALS => Some(Box::new(FilterNode::NeStr { idx, val })),
-        _ => None,
+        _ => Some(Box::new(FilterNode::NeStr { idx, val })),
     }
 }
 
@@ -1005,15 +1056,11 @@ fn try_compile_str_bool(
     receiver: &Expr,
     arg: &Expr,
 ) -> Option<Box<FilterNode>> {
-    let var_name = match receiver {
-        Expr::Ident(name) => name,
-        _ => return None,
-    };
+    let idx = resolve_var(ctx, receiver)?;
     let val = match arg {
         Expr::Literal(LiteralValue::String(s)) => s.inner().to_string(),
         _ => return None,
     };
-    let idx = ctx.var_idx(var_name);
     match func {
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
@@ -1032,16 +1079,12 @@ fn try_compile_target_str_bool(
         return None;
     }
     let target_expr = call.target.as_ref()?;
-    let var_name = match &target_expr.expr {
-        Expr::Ident(name) => name,
-        _ => return None,
-    };
+    let idx = resolve_var(ctx, &target_expr.expr)?;
     let arg = call.args.first()?;
     let val = match &arg.expr {
         Expr::Literal(LiteralValue::String(s)) => s.inner().to_string(),
         _ => return None,
     };
-    let idx = ctx.var_idx(var_name);
     match func {
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
@@ -1050,20 +1093,12 @@ fn try_compile_target_str_bool(
     }
 }
 
-fn try_compile_in_set(
-    ctx: &mut FilterCtx,
-    left: &Expr,
-    right: &Expr,
-) -> Option<Box<FilterNode>> {
-    let var_name = match left {
-        Expr::Ident(name) => name,
-        _ => return None,
-    };
+fn try_compile_in_set(ctx: &mut FilterCtx, left: &Expr, right: &Expr) -> Option<Box<FilterNode>> {
+    let idx = resolve_var(ctx, left)?;
     let list = match right {
         Expr::List(list) => &list.elements,
         _ => return None,
     };
-    let idx = ctx.var_idx(var_name);
 
     // Try all-int
     let mut ints = Vec::with_capacity(list.len());
