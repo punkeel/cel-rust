@@ -1,19 +1,19 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
-use crate::vm::filter_tree::{EvalView, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
+use crate::vm::filter_tree::{CompiledNode, EvalView, FilterNode, I64Expr, ItemPredicate, ListExpr, StrExpr};
 use crate::objects::Value;
 use crate::Expression;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct FilterTree {
-    pub root: FilterNode,
+    pub compiled: CompiledNode,
     pub var_names: Vec<String>,
 }
 
 impl FilterTree {
     pub fn eval_bool(&self, ctx: &EvalView) -> bool {
-        self.root.eval_bool(ctx)
+        self.compiled.eval_bool(ctx)
     }
 
     pub fn bind_vars(&self, ctx: &crate::Context) -> Vec<crate::objects::Value> {
@@ -41,7 +41,7 @@ pub fn compile_filter_tree_with_schema(
     let mut ctx = FilterCtx::with_schema(field_names, bool_fields);
     let filter = compile_expr(&mut ctx, &expr.expr)?;
     Ok(FilterTree {
-        root: *filter,
+        compiled: filter.compile(),
         var_names: ctx.var_names,
     })
 }
@@ -50,7 +50,7 @@ pub fn compile_filter_tree(expr: &Expression) -> Result<FilterTree, String> {
     let mut ctx = FilterCtx::new();
     let filter = compile_expr(&mut ctx, &expr.expr)?;
     Ok(FilterTree {
-        root: *filter,
+        compiled: filter.compile(),
         var_names: ctx.var_names,
     })
 }
