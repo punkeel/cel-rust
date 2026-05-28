@@ -6,80 +6,14 @@ use std::sync::Arc;
 
 /// Fast-evaluation context view exposing typed arrays.
 ///
-/// Closures access field values directly through the appropriate typed
-/// slice, completely bypassing the `Value` enum match for int/string
-/// fields. The `values` fallback slice exists for compound types (lists,
-/// maps) and boolean fields.
+/// Int and string fields access their dedicated slices directly,
+/// bypassing the `Value` enum match entirely. Compound types (lists,
+/// maps, booleans) fall back to `values`.
 #[derive(Clone, Copy)]
 pub struct EvalView<'a> {
     pub ints: &'a [i64],
     pub strings: &'a [Arc<str>],
     pub values: &'a [Value],
-}
-
-// ── Compiled node (specialized Bool vs Value) ──
-
-/// A compiled expression node with two variants:
-/// - Bool: fast path returning bool (no Value wrapping)
-/// - Value: returns an arbitrary Value (future non-bool expressions)
-pub enum CompiledNode {
-    Bool(Box<dyn Fn(&EvalView) -> bool>),
-    Value(Box<dyn Fn(&EvalView) -> Value>),
-}
-
-impl CompiledNode {
-    #[inline(always)]
-    pub fn eval_bool(&self, ctx: &EvalView) -> bool {
-        match self {
-            Self::Bool(f) => f(ctx),
-            Self::Value(f) => matches!(f(ctx), Value::Bool(true)),
-        }
-    }
-
-    #[inline(always)]
-    pub fn eval(&self, ctx: &EvalView) -> Value {
-        match self {
-            Self::Bool(f) => Value::Bool(f(ctx)),
-            Self::Value(f) => f(ctx),
-        }
-    }
-}
-
-// ── Compiled filter node (wraps CompiledNode) ──
-
-/// A compiled filter expression backed by a single closure.
-/// Wraps a CompiledNode.
-pub struct CompiledFilterNode(CompiledNode);
-
-impl CompiledFilterNode {
-    pub fn new(f: Box<dyn Fn(&EvalView) -> Value>) -> Self {
-        Self(CompiledNode::Value(f))
-    }
-
-    pub fn new_bool(f: Box<dyn Fn(&EvalView) -> bool>) -> Self {
-        Self(CompiledNode::Bool(f))
-    }
-
-    #[inline(always)]
-    pub fn eval(&self, ctx: &EvalView) -> Value {
-        self.0.eval(ctx)
-    }
-
-    #[inline(always)]
-    pub fn eval_bool(&self, ctx: &EvalView) -> bool {
-        self.0.eval_bool(ctx)
-    }
-
-    /// Unwrap into the inner CompiledNode.
-    pub fn into_inner(self) -> CompiledNode {
-        self.0
-    }
-}
-
-impl std::fmt::Debug for CompiledFilterNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledFilterNode").finish()
-    }
 }
 
 // ── Item predicate closure for ExistsClosure ──
@@ -109,7 +43,7 @@ impl ItemPredicate {
     }
 }
 
-/// A typed string expression that evaluates to `&str` (via reference to var storage).
+/// A typed string expression that evaluates to a length.
 #[derive(Clone, Debug)]
 pub enum StrExpr {
     Literal(String),
@@ -118,22 +52,11 @@ pub enum StrExpr {
 }
 
 impl StrExpr {
-    /// Compile length calculation into a closure.
-    pub fn compile_len(&self) -> Box<dyn Fn(&EvalView) -> usize> {
+    pub fn eval_len(&self, ctx: &EvalView) -> usize {
         match self {
-            Self::Literal(s) => {
-                let len = s.len();
-                Box::new(move |_| len)
-            }
-            Self::Var(idx) => {
-                let i = *idx;
-                Box::new(move |ctx| ctx.strings[i].len())
-            }
-            Self::Concat(a, b) => {
-                let a_fn = a.compile_len();
-                let b_fn = b.compile_len();
-                Box::new(move |ctx| a_fn(ctx) + b_fn(ctx))
-            }
+            Self::Literal(s) => s.len(),
+            Self::Var(idx) => ctx.strings[*idx].len(),
+            Self::Concat(a, b) => a.eval_len(ctx) + b.eval_len(ctx),
         }
     }
 }
@@ -145,16 +68,12 @@ pub enum ListExpr {
 }
 
 impl ListExpr {
-    /// Compile length calculation into a closure.
-    pub fn compile_len(&self) -> Box<dyn Fn(&EvalView) -> usize> {
+    pub fn eval_len(&self, ctx: &EvalView) -> usize {
         match self {
-            Self::Var(idx) => {
-                let i = *idx;
-                Box::new(move |ctx| match &ctx.values[i] {
-                    Value::List(list) => list.len(),
-                    _ => 0,
-                })
-            }
+            Self::Var(idx) => match &ctx.values[*idx] {
+                Value::List(list) => list.len(),
+                _ => 0,
+            },
         }
     }
 }
@@ -178,70 +97,42 @@ pub enum I64Expr {
 }
 
 impl I64Expr {
-    /// Compile this expression into a callable closure returning i64.
-    pub fn compile(&self) -> Box<dyn Fn(&EvalView) -> i64> {
+    pub fn eval_i64(&self, ctx: &EvalView) -> i64 {
         match self {
-            Self::Literal(v) => {
-                let v = *v;
-                Box::new(move |_| v)
-            }
-            Self::Var(idx) => {
-                let i = *idx;
-                Box::new(move |ctx| ctx.ints[i])
-            }
-            Self::Add(a, b) => {
-                let a_fn = a.compile();
-                let b_fn = b.compile();
-                Box::new(move |ctx| a_fn(ctx).wrapping_add(b_fn(ctx)))
-            }
-            Self::Sub(a, b) => {
-                let a_fn = a.compile();
-                let b_fn = b.compile();
-                Box::new(move |ctx| a_fn(ctx).wrapping_sub(b_fn(ctx)))
-            }
-            Self::Mul(a, b) => {
-                let a_fn = a.compile();
-                let b_fn = b.compile();
-                Box::new(move |ctx| a_fn(ctx).wrapping_mul(b_fn(ctx)))
-            }
+            Self::Literal(v) => *v,
+            Self::Var(idx) => ctx.ints[*idx],
+            Self::Add(a, b) => a.eval_i64(ctx).wrapping_add(b.eval_i64(ctx)),
+            Self::Sub(a, b) => a.eval_i64(ctx).wrapping_sub(b.eval_i64(ctx)),
+            Self::Mul(a, b) => a.eval_i64(ctx).wrapping_mul(b.eval_i64(ctx)),
             Self::Div(a, b) => {
-                let a_fn = a.compile();
-                let b_fn = b.compile();
-                Box::new(move |ctx| {
-                    let bv = b_fn(ctx);
-                    if bv == 0 { 0 } else { a_fn(ctx).wrapping_div(bv) }
-                })
+                let bv = b.eval_i64(ctx);
+                if bv == 0 { 0 } else { a.eval_i64(ctx).wrapping_div(bv) }
             }
             Self::Mod(a, b) => {
-                let a_fn = a.compile();
-                let b_fn = b.compile();
-                Box::new(move |ctx| {
-                    let bv = b_fn(ctx);
-                    if bv == 0 { 0 } else { a_fn(ctx).wrapping_rem(bv) }
-                })
+                let bv = b.eval_i64(ctx);
+                if bv == 0 { 0 } else { a.eval_i64(ctx).wrapping_rem(bv) }
             }
-            Self::Neg(a) => {
-                let a_fn = a.compile();
-                Box::new(move |ctx| a_fn(ctx).wrapping_neg())
-            }
-            Self::StrLen(s) => {
-                let s_fn = s.compile_len();
-                Box::new(move |ctx| s_fn(ctx) as i64)
-            }
-            Self::ListLen(l) => {
-                let l_fn = l.compile_len();
-                Box::new(move |ctx| l_fn(ctx) as i64)
-            }
+            Self::Neg(a) => a.eval_i64(ctx).wrapping_neg(),
+            Self::StrLen(s) => s.eval_len(ctx) as i64,
+            Self::ListLen(l) => l.eval_len(ctx) as i64,
         }
     }
 }
 
 // =====================================================================
-// FilterNode — concrete enum replaced by CompiledFilterNode at runtime
+// FilterNode — the unified expression tree: both compile-time IR and
+//              evaluation engine. No separate compilation step needed.
 // =====================================================================
 
-/// A boolean expression tree, used as a compile-time IR.
-/// Compiled to a closure via `compile()` before evaluation.
+/// A boolean expression tree that can be evaluated directly.
+///
+/// Dual-purpose: serves as both the compile-time IR (pattern-matchable,
+/// debuggable, cheap to clone) and the runtime evaluation engine
+/// (via `eval_bool` / `eval`).
+///
+/// There is no separate compilation step or closure indirection —
+/// evaluation is a single match on this enum, fully visible to the
+/// optimizer for inlining.
 #[derive(Clone, Debug)]
 pub enum FilterNode {
     // --- Int comparisons (var op literal) ---
@@ -325,306 +216,172 @@ pub enum FilterNode {
 }
 
 impl FilterNode {
-    /// Compile this node into a callable closure.
-    /// The returned `CompiledFilterNode` uses typed access — int fields
-    /// read from `EvalView::ints`, strings from `EvalView::strings`,
-    /// skipping the Value enum match entirely.
-    pub fn compile(&self) -> CompiledFilterNode {
+    /// Evaluate the node as a boolean.
+    ///
+    /// Fast path — returns `bool` directly without any `Value::Bool` wrapping.
+    /// For future non-bool variants, use [`eval`] instead.
+    #[inline(always)]
+    pub fn eval_bool(&self, ctx: &EvalView) -> bool {
         match self {
             // ── Int comparisons: direct ctx.ints access ──
-            Self::EqInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] == val))
-            }
-            Self::NeInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] != val))
-            }
-            Self::LtInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] < val))
-            }
-            Self::LeInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] <= val))
-            }
-            Self::GtInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] > val))
-            }
-            Self::GeInt { idx, val } => {
-                let idx = *idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx] >= val))
-            }
+            Self::EqInt { idx, val } => ctx.ints[*idx] == *val,
+            Self::NeInt { idx, val } => ctx.ints[*idx] != *val,
+            Self::LtInt { idx, val } => ctx.ints[*idx] < *val,
+            Self::LeInt { idx, val } => ctx.ints[*idx] <= *val,
+            Self::GtInt { idx, val } => ctx.ints[*idx] > *val,
+            Self::GeInt { idx, val } => ctx.ints[*idx] >= *val,
 
-            // ── Fused arithmetic + comparison: ctx.ints with wrapping arith ──
-            Self::AddEq { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) == cmp))
-            }
-            Self::AddNe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) != cmp))
-            }
-            Self::AddLt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) < cmp))
-            }
-            Self::AddLe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) <= cmp))
-            }
-            Self::AddGt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) > cmp))
-            }
-            Self::AddGe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_add(arith) >= cmp))
-            }
-            Self::SubEq { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) == cmp))
-            }
-            Self::SubNe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) != cmp))
-            }
-            Self::SubLt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) < cmp))
-            }
-            Self::SubLe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) <= cmp))
-            }
-            Self::SubGt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) > cmp))
-            }
-            Self::SubGe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_sub(arith) >= cmp))
-            }
-            Self::MulEq { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) == cmp))
-            }
-            Self::MulNe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) != cmp))
-            }
-            Self::MulLt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) < cmp))
-            }
-            Self::MulLe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) <= cmp))
-            }
-            Self::MulGt { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) > cmp))
-            }
-            Self::MulGe { idx, arith, cmp } => {
-                let idx = *idx; let arith = *arith; let cmp = *cmp;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.ints[idx].wrapping_mul(arith) >= cmp))
-            }
+            // ── Fused arithmetic + comparison ──
+            Self::AddEq { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) == *cmp,
+            Self::AddNe { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) != *cmp,
+            Self::AddLt { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) < *cmp,
+            Self::AddLe { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) <= *cmp,
+            Self::AddGt { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) > *cmp,
+            Self::AddGe { idx, arith, cmp } => ctx.ints[*idx].wrapping_add(*arith) >= *cmp,
+            Self::SubEq { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) == *cmp,
+            Self::SubNe { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) != *cmp,
+            Self::SubLt { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) < *cmp,
+            Self::SubLe { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) <= *cmp,
+            Self::SubGt { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) > *cmp,
+            Self::SubGe { idx, arith, cmp } => ctx.ints[*idx].wrapping_sub(*arith) >= *cmp,
+            Self::MulEq { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) == *cmp,
+            Self::MulNe { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) != *cmp,
+            Self::MulLt { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) < *cmp,
+            Self::MulLe { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) <= *cmp,
+            Self::MulGt { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) > *cmp,
+            Self::MulGe { idx, arith, cmp } => ctx.ints[*idx].wrapping_mul(*arith) >= *cmp,
 
             // ── String comparison: direct ctx.strings access ──
-            Self::EqStr { idx, val } => {
-                let idx = *idx; let val: Arc<str> = Arc::from(val.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.strings[idx].as_ref() == val.as_ref()))
-            }
-            Self::NeStr { idx, val } => {
-                let idx = *idx; let val: Arc<str> = Arc::from(val.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.strings[idx].as_ref() != val.as_ref()))
-            }
+            Self::EqStr { idx, val } => ctx.strings[*idx].as_ref() == val.as_str(),
+            Self::NeStr { idx, val } => ctx.strings[*idx].as_ref() != val.as_str(),
 
-            // ── Bool: via values fallback (not in typed arrays) ──
-            Self::BoolVar { idx } => {
-                let idx = *idx;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[idx] {
-                    Value::Bool(b) => *b,
-                    _ => false,
-                }))
-            }
+            // ── Bool: via values fallback ──
+            Self::BoolVar { idx } => match &ctx.values[*idx] {
+                Value::Bool(b) => *b,
+                _ => false,
+            },
 
-            // ── Int set membership: ctx.ints ──
-            Self::InIntLinear { idx, vals } => {
-                let idx = *idx; let vals = vals.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| vals.contains(&ctx.ints[idx])))
-            }
-            Self::InIntHash { idx, set } => {
-                let idx = *idx; let set: HashSet<i64> = set.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| set.contains(&ctx.ints[idx])))
-            }
+            // ── Int set membership ──
+            Self::InIntLinear { idx, vals } => vals.contains(&ctx.ints[*idx]),
+            Self::InIntHash { idx, set } => set.contains(&ctx.ints[*idx]),
 
-            // ── Str set membership: ctx.strings ──
+            // ── Str set membership ──
             Self::InStrLinear { idx, vals } => {
-                let idx = *idx; let vals = vals.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| {
-                    let v = ctx.strings[idx].as_ref();
-                    vals.iter().any(|s| s == v)
-                }))
+                let v = ctx.strings[*idx].as_ref();
+                vals.iter().any(|s| s == v)
             }
-            Self::InStrHash { idx, set } => {
-                let idx = *idx; let set: HashSet<String> = set.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| set.contains(ctx.strings[idx].as_ref())))
-            }
+            Self::InStrHash { idx, set } => set.contains(ctx.strings[*idx].as_ref()),
 
-            // ── String methods: ctx.strings ──
-            Self::StartsWith { idx, prefix } => {
-                let idx = *idx; let s: Arc<str> = Arc::from(prefix.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.strings[idx].starts_with(s.as_ref())))
-            }
-            Self::EndsWith { idx, suffix } => {
-                let idx = *idx; let s: Arc<str> = Arc::from(suffix.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.strings[idx].ends_with(s.as_ref())))
-            }
-            Self::Contains { idx, substring } => {
-                let idx = *idx; let s: Arc<str> = Arc::from(substring.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| ctx.strings[idx].contains(s.as_ref())))
-            }
-            Self::Matches { idx, regex } => {
-                let idx = *idx; let regex = regex.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| regex.is_match(ctx.strings[idx].as_ref())))
-            }
+            // ── String methods ──
+            Self::StartsWith { idx, prefix } => ctx.strings[*idx].starts_with(prefix.as_str()),
+            Self::EndsWith { idx, suffix } => ctx.strings[*idx].ends_with(suffix.as_str()),
+            Self::Contains { idx, substring } => ctx.strings[*idx].contains(substring.as_str()),
+            Self::Matches { idx, regex } => regex.is_match(ctx.strings[*idx].as_ref()),
 
-            // ── Multi-pattern contains: ctx.strings ──
+            // ── Multi-pattern contains ──
             Self::ContainsAny { idx, needles } => {
-                let idx = *idx; let needles = needles.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| {
-                    let text = ctx.strings[idx].as_ref();
-                    for n in &needles { if text.contains(n.as_str()) { return true; } }
-                    false
-                }))
+                let text = ctx.strings[*idx].as_ref();
+                for n in needles { if text.contains(n.as_str()) { return true; } }
+                false
             }
             Self::AhoContains { idx, ac, min } => {
-                let idx = *idx; let ac = ac.clone(); let min = *min;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| {
-                    let text = ctx.strings[idx].as_ref();
-                    let bytes = text.as_bytes();
-                    if min <= 1 { return ac.is_match(bytes); }
-                    let mut matched = 0u64;
-                    for mat in ac.find_iter(bytes) {
-                        let pid = mat.pattern().as_u64();
-                        if pid < 64 {
-                            matched |= 1u64 << pid;
-                            if matched.count_ones() as usize >= min { return true; }
-                        }
+                let text = ctx.strings[*idx].as_ref();
+                let bytes = text.as_bytes();
+                if *min <= 1 { return ac.is_match(bytes); }
+                let mut matched = 0u64;
+                for mat in ac.find_iter(bytes) {
+                    let pid = mat.pattern().as_u64();
+                    if pid < 64 {
+                        matched |= 1u64 << pid;
+                        if matched.count_ones() as usize >= *min { return true; }
                     }
-                    false
-                }))
+                }
+                false
             }
 
-            // ── I64Expr comparisons: pass ctx through to sub-closures ──
-            Self::GeExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) >= r_fn(ctx)))
-            }
-            Self::GtExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) > r_fn(ctx)))
-            }
-            Self::LeExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) <= r_fn(ctx)))
-            }
-            Self::LtExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) < r_fn(ctx)))
-            }
-            Self::EqExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) == r_fn(ctx)))
-            }
-            Self::NeExpr { left, right } => {
-                let l_fn = left.compile(); let r_fn = right.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| l_fn(ctx) != r_fn(ctx)))
-            }
+            // ── I64Expr comparisons: recursive eval ──
+            Self::GeExpr { left, right } => left.eval_i64(ctx) >= right.eval_i64(ctx),
+            Self::GtExpr { left, right } => left.eval_i64(ctx) > right.eval_i64(ctx),
+            Self::LeExpr { left, right } => left.eval_i64(ctx) <= right.eval_i64(ctx),
+            Self::LtExpr { left, right } => left.eval_i64(ctx) < right.eval_i64(ctx),
+            Self::EqExpr { left, right } => left.eval_i64(ctx) == right.eval_i64(ctx),
+            Self::NeExpr { left, right } => left.eval_i64(ctx) != right.eval_i64(ctx),
 
-            // ── Logic combinators: compose via ctx ──
-            Self::And(a, b) => {
-                let a_fn = a.compile(); let b_fn = b.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| a_fn.eval_bool(ctx) && b_fn.eval_bool(ctx)))
-            }
-            Self::Or(a, b) => {
-                let a_fn = a.compile(); let b_fn = b.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| {
-                    if a_fn.eval_bool(ctx) { return true; }
-                    b_fn.eval_bool(ctx)
-                }))
-            }
-            Self::Not(inner) => {
-                let inner_fn = inner.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| !inner_fn.eval_bool(ctx)))
-            }
+            // ── Logic combinators: recursive eval ──
+            Self::And(a, b) => a.eval_bool(ctx) && b.eval_bool(ctx),
+            Self::Or(a, b) => a.eval_bool(ctx) || b.eval_bool(ctx),
+            Self::Not(inner) => !inner.eval_bool(ctx),
 
             // ── General Exists: allocates scratch vector ──
             Self::Exists { list_idx, item_idx, predicate } => {
-                let list_idx = *list_idx; let item_idx = *item_idx; let pred = predicate.compile();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[list_idx] {
+                match &ctx.values[*list_idx] {
                     Value::List(list) => {
                         let mut extended = ctx.values.to_vec();
                         extended.push(Value::Null);
                         for item in list.iter() {
-                            extended[item_idx] = item.clone();
+                            extended[*item_idx] = item.clone();
                             let tmp = EvalView {
                                 ints: ctx.ints,
                                 strings: ctx.strings,
                                 values: &extended,
                             };
-                            if pred.eval_bool(&tmp) { return true; }
+                            if predicate.eval_bool(&tmp) { return true; }
                         }
                         false
                     }
                     _ => false,
-                }))
+                }
             }
 
-            // ── ExistsClosure: no alloc, ItemPredicate works on &Value ──
+            // ── ExistsClosure: no alloc ──
             Self::ExistsClosure { list_idx, predicate } => {
-                let list_idx = *list_idx; let pred = predicate.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[list_idx] {
-                    Value::List(list) => list.iter().any(|item| pred.call(item)),
+                match &ctx.values[*list_idx] {
+                    Value::List(list) => list.iter().any(|item| predicate.call(item)),
                     _ => false,
-                }))
+                }
             }
 
-            // ── Map-key contains: via values fallback ──
+            // ── Map-key contains ──
             Self::MapKeyContains { map_idx, key, needle } => {
-                let map_idx = *map_idx;
-                let key: Arc<str> = Arc::from(key.as_str());
-                let needle: Arc<str> = Arc::from(needle.as_str());
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[map_idx] {
+                match &ctx.values[*map_idx] {
                     Value::Map(m) => {
-                        let k = Key::String(Arc::clone(&key));
+                        let k = Key::String(Arc::from(key.as_str()));
                         match m.map.get(&k) {
-                            Some(Value::String(s)) => s.as_ref() == needle.as_ref(),
-                            Some(Value::List(list)) => list.iter().any(|v| matches!(v, Value::String(s) if s.as_ref() == needle.as_ref())),
+                            Some(Value::String(s)) => s.as_ref() == needle.as_str(),
+                            Some(Value::List(list)) => list.iter().any(|v| matches!(v, Value::String(s) if s.as_ref() == needle.as_str())),
                             _ => false,
                         }
                     }
                     _ => false,
-                }))
+                }
             }
 
             // ── Specialized exists ──
             Self::ExistsInIntSet { list_idx, vals } => {
-                let list_idx = *list_idx; let vals = vals.clone();
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[list_idx] {
+                match &ctx.values[*list_idx] {
                     Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if vals.contains(i))),
                     _ => false,
-                }))
+                }
             }
             Self::ExistsEqInt { list_idx, val } => {
-                let list_idx = *list_idx; let val = *val;
-                CompiledFilterNode::new_bool(Box::new(move |ctx| match &ctx.values[list_idx] {
-                    Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if *i == val)),
+                match &ctx.values[*list_idx] {
+                    Value::List(list) => list.iter().any(|v| matches!(v, Value::Int(i) if *i == *val)),
                     _ => false,
-                }))
+                }
             }
         }
+    }
+
+    /// Evaluate the node and return a `Value`.
+    ///
+    /// Current variants all return `Value::Bool(...)`. Future non-bool
+    /// variants (arithmetic, UDFs) will return their typed Value directly.
+    /// Prefer [`eval_bool`] when the expression is known to be boolean —
+    /// it avoids the `Value::Bool` wrapping.
+    #[inline(always)]
+    pub fn eval(&self, ctx: &EvalView) -> Value {
+        // All current variants are boolean — wrap the fast path.
+        // Future non-bool variants will get their own match arms here.
+        Value::Bool(self.eval_bool(ctx))
     }
 }
