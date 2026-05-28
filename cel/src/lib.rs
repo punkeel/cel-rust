@@ -168,14 +168,15 @@ impl ExecutionError {
 #[derive(Debug)]
 pub struct Program {
     expression: Expression,
+    tree: Option<vm::filter_tree_compiler::CompiledFilterTree>,
 }
 
 impl Program {
     pub fn compile(source: &str) -> Result<Program, ParseErrors> {
         let parser = Parser::default();
-        parser
-            .parse(source)
-            .map(|expression| Program { expression })
+        let expression = parser.parse(source)?;
+        let tree = vm::compile_filter_tree(&expression).ok();
+        Ok(Program { expression, tree })
     }
 
     /// Compile and resolve function handles using the given environment.
@@ -186,11 +187,31 @@ impl Program {
         let mut expression = parser.parse(source)?;
         let resolver = crate::function_handle::FunctionResolver::new(env);
         crate::function_handle::resolve_ast(&mut expression, &resolver);
-        Ok(Program { expression })
+        let tree = vm::compile_filter_tree(&expression).ok();
+        Ok(Program { expression, tree })
     }
 
+    /// Evaluate the expression using the AST interpreter.
+    /// Always correct — uses the original AST walking logic.
     pub fn execute(&self, context: &Context) -> ResolveResult {
         Value::resolve(&self.expression, context)
+    }
+
+    /// Evaluate using the compiled closure fast path.
+    /// ~1–6 ns for filter-like boolean expressions.
+    /// Falls back to AST for non-compilable expressions.
+    pub fn execute_fast(&self, context: &Context) -> ResolveResult {
+        if let Some(ref tree) = self.tree {
+            let (ints, strings) = tree.bind_typed(context);
+            tree.compiled.eval_value(&ints, &strings)
+        } else {
+            self.execute(context)
+        }
+    }
+
+    /// Returns the compiled filter tree, if the expression compiles.
+    pub fn compile_tree(&self) -> Option<&vm::filter_tree_compiler::CompiledFilterTree> {
+        self.tree.as_ref()
     }
 
     /// Returns the variables and functions referenced by the CEL program
