@@ -1076,15 +1076,22 @@ fn compile_comprehension(
         let init_val = accu_init_fn(ctx)?;
 
         let iter_val = iter_range_fn(ctx)?;
+        let is_map_iter: bool;
         let items: Vec<Value> = match &iter_val {
-            Value::List(list) => list.iter().cloned().collect(),
-            Value::Map(map) => map
-                .map
-                .iter()
-                .map(|(k, v)| {
-                    Value::List(Arc::new(vec![k.clone().into(), v.clone()]))
-                })
-                .collect(),
+            Value::List(list) => {
+                is_map_iter = false;
+                list.iter().cloned().collect()
+            }
+            Value::Map(map) => {
+                is_map_iter = true;
+                map
+                    .map
+                    .iter()
+                    .map(|(k, v)| {
+                        Value::List(Arc::new(vec![k.clone().into(), v.clone()]))
+                    })
+                    .collect()
+            }
             _ => return Err(ExecutionError::NoSuchOverload),
         };
 
@@ -1114,9 +1121,13 @@ fn compile_comprehension(
                     }
                 },
                 None => {
-                    let key_val = match item {
-                        Value::List(pair) if pair.len() >= 2 => pair[0].clone(),
-                        _ => item.clone(),
+                    let key_val = if is_map_iter {
+                        match item {
+                            Value::List(pair) if pair.len() >= 2 => pair[0].clone(),
+                            _ => item.clone(),
+                        }
+                    } else {
+                        item.clone()
                     };
                     let cow: Box<dyn Val> = key_val
                         .clone()
