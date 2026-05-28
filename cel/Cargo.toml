@@ -34,10 +34,6 @@ wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter.git" }
 name = "score"
 harness = false
 
-[[bench]]
-name = "filter_tree"
-harness = false
-
 [features]
 default = ["regex", "chrono"]
 structs = []
