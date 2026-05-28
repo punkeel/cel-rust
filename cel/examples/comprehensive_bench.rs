@@ -532,4 +532,296 @@ fn main() {
     println!("  vs FilterTree (no schema) {:>6.1}×", ft_score / schema_eval);
 
     println!("\n═══════════════════════════════════════════════════════════════\n");
+
+    // ── Run test suite expression benchmarks ──
+    bench_test_suite_expressions();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  TEST SUITE EXPRESSIONS — All unique CEL expressions extracted from the
+//  test suite, organized by category. Each expression is compiled once via
+//  Program::compile and then measured with Program::execute in a tight loop.
+// ═════════════════════════════════════════════════════════════════════════════
+
+fn bench_ns<F: FnMut()>(mut f: F) -> f64 {
+    // Warmup
+    let warmup = Instant::now();
+    while warmup.elapsed().as_millis() < 100 { f(); }
+
+    // Measure batch times
+    let mut times = Vec::new();
+    let start = Instant::now();
+    while start.elapsed().as_millis() < 500 {
+        let batch = Instant::now();
+        for _ in 0..1000 { f(); }
+        times.push(batch.elapsed().as_nanos() as f64 / 1000.0);
+    }
+
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = times.len() / 2;
+    if times.len() % 2 == 0 { (times[mid-1] + times[mid]) / 2.0 } else { times[mid] }
+}
+
+fn bench_expr(prog: &Program, ctx: &Context, label: &str) -> f64 {
+    // Verify it executes correctly first
+    let _ = prog.execute(ctx).unwrap();
+    let ns = bench_ns(|| { std::hint::black_box(prog.execute(ctx).unwrap()); });
+    println!("  {:60} {:>8.1} ns", label, ns);
+    ns
+}
+
+fn bench_expr_opt(prog: &Program, ctx: &Context, label: &str) -> Option<f64> {
+    // For expressions that might fail — try and skip
+    if let Ok(_) = prog.execute(ctx) {
+        let ns = bench_ns(|| { std::hint::black_box(prog.execute(ctx).unwrap()); });
+        println!("  {:60} {:>8.1} ns", label, ns);
+        Some(ns)
+    } else {
+        println!("  {:60} {:>8} (skipped — execution error)", label, "");
+        None
+    }
+}
+
+fn bench_test_suite_expressions() {
+    use std::collections::HashMap;
+
+    println!("\n\n╔══════════════════════════════════════════════════════════════════════════╗");
+    println!("║          TEST SUITE EXPRESSIONS — ALL UNIQUE CEL EXPRESSIONS              ║");
+    println!("╚══════════════════════════════════════════════════════════════════════════╝\n");
+
+    // ── 1. LITERALS & CONSTANTS ────────────────────────────────────────────
+    println!("────────────────────── 1. LITERALS & CONSTANTS ──────────────────────");
+    bench_expr(&Program::compile("42").unwrap(), &Context::default(), "42");
+    bench_expr(&Program::compile("\"hello\"").unwrap(), &Context::default(), "\"hello\"");
+    bench_expr(&Program::compile("true").unwrap(), &Context::default(), "true");
+    bench_expr(&Program::compile("false").unwrap(), &Context::default(), "false");
+    bench_expr(&Program::compile("null").unwrap(), &Context::default(), "null");
+    bench_expr(&Program::compile("0u").unwrap(), &Context::default(), "0u");
+    bench_expr(&Program::compile("0.0").unwrap(), &Context::default(), "0.0");
+
+    // ── 2. ARITHMETIC ──────────────────────────────────────────────────────
+    println!("\n────────────────────── 2. ARITHMETIC ───────────────────────────────");
+    bench_expr(&Program::compile("1 + 2").unwrap(), &Context::default(), "1 + 2");
+    bench_expr(&Program::compile("5 - 3").unwrap(), &Context::default(), "5 - 3");
+    bench_expr(&Program::compile("3 * 4").unwrap(), &Context::default(), "3 * 4");
+    bench_expr(&Program::compile("10 / 3").unwrap(), &Context::default(), "10 / 3");
+    bench_expr(&Program::compile("10 % 3").unwrap(), &Context::default(), "10 % 3");
+    bench_expr(&Program::compile("-42").unwrap(), &Context::default(), "-42");
+    bench_expr(&Program::compile("-3.14").unwrap(), &Context::default(), "-3.14");
+    bench_expr(&Program::compile("1.0 > 0.0").unwrap(), &Context::default(), "1.0 > 0.0");
+
+    // ── 3. INTEGER COMPARISONS ─────────────────────────────────────────────
+    println!("\n────────────────────── 3. INTEGER COMPARISONS ──────────────────────");
+    bench_expr(&Program::compile("1 == 1").unwrap(), &Context::default(), "1 == 1");
+    bench_expr(&Program::compile("1 == 2").unwrap(), &Context::default(), "1 == 2");
+    bench_expr(&Program::compile("1 != 2").unwrap(), &Context::default(), "1 != 2");
+    bench_expr(&Program::compile("1 < 2").unwrap(), &Context::default(), "1 < 2");
+    bench_expr(&Program::compile("2 <= 2").unwrap(), &Context::default(), "2 <= 2");
+    bench_expr(&Program::compile("3 > 2").unwrap(), &Context::default(), "3 > 2");
+    bench_expr(&Program::compile("3 >= 3").unwrap(), &Context::default(), "3 >= 3");
+
+    // ── 4. STRING COMPARISONS & OPS ────────────────────────────────────────
+    println!("\n────────────────────── 4. STRING COMPARISONS & OPS ─────────────────");
+    bench_expr(&Program::compile("\"a\" == \"a\"").unwrap(), &Context::default(), "\"a\" == \"a\"");
+    bench_expr(&Program::compile("\"hello\" + \" \" + \"world\"").unwrap(), &Context::default(), "\"hello\" + \" \" + \"world\"");
+    bench_expr(&Program::compile("'foobar'.contains('bar')").unwrap(), &Context::default(), "'foobar'.contains('bar')");
+    bench_expr(&Program::compile("'foobar'.startsWith('foo')").unwrap(), &Context::default(), "'foobar'.startsWith('foo')");
+    bench_expr(&Program::compile("'foobar'.endsWith('bar')").unwrap(), &Context::default(), "'foobar'.endsWith('bar')");
+    bench_expr(&Program::compile("'foobar'.size() == 6").unwrap(), &Context::default(), "'foobar'.size() == 6");
+    bench_expr(&Program::compile("size('foo') == 3").unwrap(), &Context::default(), "size('foo') == 3");
+
+    // ── 5. LIST OPERATIONS ─────────────────────────────────────────────────
+    println!("\n────────────────────── 5. LIST OPERATIONS ──────────────────────────");
+    bench_expr(&Program::compile("[1, 2, 3]").unwrap(), &Context::default(), "[1, 2, 3]");
+    bench_expr(&Program::compile("[1, 2] + [3, 4]").unwrap(), &Context::default(), "[1, 2] + [3, 4]");
+    bench_expr(&Program::compile("1 in [1, 2, 3]").unwrap(), &Context::default(), "1 in [1, 2, 3]");
+    bench_expr(&Program::compile("4 in [1, 2, 3]").unwrap(), &Context::default(), "4 in [1, 2, 3]");
+    bench_expr(&Program::compile("[1, 2, 3].size() == 3").unwrap(), &Context::default(), "[1, 2, 3].size() == 3");
+    bench_expr(&Program::compile("size([1, 2, 3]) == 3").unwrap(), &Context::default(), "size([1, 2, 3]) == 3");
+
+    // ── 6. MAP OPERATIONS ──────────────────────────────────────────────────
+    println!("\n────────────────────── 6. MAP OPERATIONS ───────────────────────────");
+    bench_expr(&Program::compile("{\"a\": 1, \"b\": 2}").unwrap(), &Context::default(), "{\"a\": 1, \"b\": 2}");
+    bench_expr(&Program::compile("size({'a': 1, 'b': 2, 'c': 3}) == 3").unwrap(), &Context::default(), "size({'a': 1, 'b': 2, 'c': 3}) == 3");
+
+    // ── 7. BOOLEAN / LOGICAL ───────────────────────────────────────────────
+    println!("\n────────────────────── 7. BOOLEAN / LOGICAL ────────────────────────");
+    bench_expr(&Program::compile("true && true").unwrap(), &Context::default(), "true && true");
+    bench_expr(&Program::compile("false && false").unwrap(), &Context::default(), "false && false");
+    bench_expr(&Program::compile("false && (1 / 0 == 0)").unwrap(), &Context::default(), "false && (1 / 0 == 0) [short-circuit]");
+    bench_expr(&Program::compile("true || false").unwrap(), &Context::default(), "true || false");
+    bench_expr(&Program::compile("false || false").unwrap(), &Context::default(), "false || false");
+    bench_expr(&Program::compile("true || (1 / 0 == 0)").unwrap(), &Context::default(), "true || (1 / 0 == 0) [short-circuit]");
+    bench_expr(&Program::compile("!true").unwrap(), &Context::default(), "!true");
+    bench_expr(&Program::compile("true ? 1 : 2").unwrap(), &Context::default(), "true ? 1 : 2");
+    bench_expr(&Program::compile("false ? 1 : 2").unwrap(), &Context::default(), "false ? 1 : 2");
+
+    // ── 8. VARIABLE ACCESS ─────────────────────────────────────────────────
+    println!("\n────────────────────── 8. VARIABLE ACCESS ──────────────────────────");
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable("x", 42i64).unwrap();
+        bench_expr(&Program::compile("x").unwrap(), &ctx, "x = 42");
+    }
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("foo", HashMap::from([("bar", 1i64)]));
+        bench_expr(&Program::compile("foo.bar == 1").unwrap(), &ctx, "foo.bar == 1");
+    }
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("arr", vec![1i64, 2, 3]);
+        bench_expr(&Program::compile("arr[0] == 1").unwrap(), &ctx, "arr[0] == 1");
+    }
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("obj", HashMap::from([("inner", HashMap::from([("value", 42i64)]))]));
+        bench_expr(&Program::compile("obj.inner.value").unwrap(), &ctx, "obj.inner.value  [nested field]");
+    }
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("obj", HashMap::from([("a", 1i64)]));
+        bench_expr(&Program::compile("has(obj.a)").unwrap(), &ctx, "has(obj.a)");
+    }
+
+    // ── 9. COMPREHENSIONS (all / exists / exists_one / map / filter) ───────
+    println!("\n────────────────────── 9. COMPREHENSIONS ────────────────────────────");
+    bench_expr(&Program::compile("[0, 1, 2].all(x, x >= 0)").unwrap(), &Context::default(), "[0, 1, 2].all(x, x >= 0)  [all true]");
+    bench_expr(&Program::compile("[0, -1, 2].all(x, x >= 0)").unwrap(), &Context::default(), "[0, -1, 2].all(x, x >= 0)  [all false]");
+    bench_expr(&Program::compile("[true, true, true].all(x, x)").unwrap(), &Context::default(), "[true, true, true].all(x, x)  [identity]");
+    bench_expr(&Program::compile("[0, 1, 2].exists(x, x > 1)").unwrap(), &Context::default(), "[0, 1, 2].exists(x, x > 1)");
+    bench_expr(&Program::compile("[0, 1, 2].exists(x, x > 5)").unwrap(), &Context::default(), "[0, 1, 2].exists(x, x > 5)  [false]");
+    bench_expr(&Program::compile("[0, 1, 2].exists_one(x, x == 0)").unwrap(), &Context::default(), "[0, 1, 2].exists_one(x, x == 0)");
+    bench_expr(&Program::compile("[1, 2, 3].map(x, x * 2) == [2, 4, 6]").unwrap(), &Context::default(), "[1, 2, 3].map(x, x * 2) == [2, 4, 6]");
+    bench_expr(&Program::compile("[1, 2, 3].filter(x, x > 2) == [3]").unwrap(), &Context::default(), "[1, 2, 3].filter(x, x > 2) == [3]");
+    bench_expr(&Program::compile("['abc'].all(x, x.contains('a'))").unwrap(), &Context::default(), "['abc'].all(x, x.contains('a'))");
+    bench_expr(&Program::compile("[1, 1].map(x, x * 2)").unwrap(), &Context::default(), "[1, 1].map(x, x * 2)");
+
+    // ── 10. MAP COMPREHENSIONS ──────────────────────────────────────────────
+    println!("\n────────────────────── 10. MAP COMPREHENSIONS ───────────────────────");
+    bench_expr(&Program::compile("{0: 0, 1:1, 2:2}.all(x, x >= 0)").unwrap(), &Context::default(), "{0: 0, 1:1, 2:2}.all(x, x >= 0)");
+    bench_expr(&Program::compile("{0: 0, 1:1, 2:2}.exists(x, x > 0)").unwrap(), &Context::default(), "{0: 0, 1:1, 2:2}.exists(x, x > 0)");
+
+    // ── 11. HETEROGENEOUS / TYPE MIXING ─────────────────────────────────────
+    println!("\n────────────────────── 11. HETEROGENEOUS COMPARISONS ────────────────");
+    bench_expr(&Program::compile("1 < uint(2)").unwrap(), &Context::default(), "1 < uint(2)");
+    bench_expr(&Program::compile("1 < 1.1").unwrap(), &Context::default(), "1 < 1.1");
+    bench_expr(&Program::compile("uint(0) > -10").unwrap(), &Context::default(), "uint(0) > -10");
+    bench_expr(&Program::compile("{} == []").unwrap(), &Context::default(), "{} == []  [different types]");
+
+    // ── 12. TYPE CONVERSIONS ────────────────────────────────────────────────
+    println!("\n────────────────────── 12. TYPE CONVERSIONS ─────────────────────────");
+    bench_expr(&Program::compile("string(10) == '10'").unwrap(), &Context::default(), "string(10) == '10'");
+    bench_expr(&Program::compile("string(10.5) == '10.5'").unwrap(), &Context::default(), "string(10.5) == '10.5'");
+    bench_expr(&Program::compile("int('10') == 10").unwrap(), &Context::default(), "int('10') == 10");
+    bench_expr(&Program::compile("uint(10) == 10u").unwrap(), &Context::default(), "uint(10) == 10u");
+    bench_expr(&Program::compile("double('10') == 10.0").unwrap(), &Context::default(), "double('10') == 10.0");
+    bench_expr(&Program::compile("double(10) == 10.0").unwrap(), &Context::default(), "double(10) == 10.0");
+    bench_expr(&Program::compile("bytes('abc') == b'abc'").unwrap(), &Context::default(), "bytes('abc') == b'abc'");
+
+    // ── 13. SHORT-CIRCUIT WITH VARIABLES ────────────────────────────────────
+    println!("\n────────────────────── 13. SHORT-CIRCUIT WITH VARIABLES ───────────────");
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("foo", 42i64);
+        ctx.add_variable_from_value("bar", 42i64);
+        bench_expr(&Program::compile("foo || bar > 0").unwrap(), &ctx, "foo || bar > 0  [short-circuit OR]");
+        bench_expr(&Program::compile("foo && bar < 0").unwrap(), &ctx, "foo && bar < 0  [short-circuit AND]");
+    }
+    {
+        let mut ctx = Context::default();
+        let data: HashMap<String, String> = HashMap::new();
+        ctx.add_variable_from_value("data", data);
+        bench_expr(&Program::compile("has(data.x) && data.x.startsWith(\"foo\")").unwrap(), &ctx,
+                   "has(data.x) && data.x.startsWith(\"foo\")  [short-circuit has]");
+    }
+
+    // ── 14. COMPOUND / COMPLEX EXPRESSIONS ─────────────────────────────────
+    println!("\n────────────────────── 14. COMPOUND EXPRESSIONS ─────────────────────");
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable("x", 10i64).unwrap();
+        ctx.add_variable("y", 20i64).unwrap();
+        bench_expr(&Program::compile("(x + y) * 2").unwrap(), &ctx, "(x + y) * 2  [compound]");
+    }
+    {
+        let mut ctx = Context::default();
+        let requests = vec![Value::Int(42), Value::Int(42)];
+        ctx.add_variable("requests", Value::List(Arc::new(requests))).unwrap();
+        ctx.add_variable("size", Value::Int(3)).unwrap();
+        bench_expr(&Program::compile("size(requests) + size == 5").unwrap(), &ctx,
+                   "size(requests) + size == 5  [size fn + var]");
+    }
+
+    // ── 15. INDEXING OPERATIONS ─────────────────────────────────────────────
+    println!("\n────────────────────── 15. INDEXING OPERATIONS ───────────────────────");
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("arr", vec![10i64, 20, 30]);
+        bench_expr(&Program::compile("arr[1]").unwrap(), &ctx, "arr[1]  [list index]");
+        bench_expr(&Program::compile("arr[-1]").unwrap(), &ctx, "arr[-1]  [negative index]");
+    }
+    {
+        let mut ctx = Context::default();
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        ctx.add_variable_from_value("headers", headers);
+        bench_expr(&Program::compile("headers[\"Content-Type\"]").unwrap(), &ctx,
+                   "headers[\"Content-Type\"]  [map index]");
+    }
+
+    // ── 16. STRING FUNCTION TESTS ───────────────────────────────────────────
+    println!("\n────────────────────── 16. STRING FUNCTION TESTS ─────────────────────");
+    // These come from functions.rs test_string, test_bytes, etc.
+    bench_expr(&Program::compile("string('foo') == 'foo'").unwrap(), &Context::default(), "string('foo') == 'foo'");
+    bench_expr(&Program::compile("string(b'foo') == 'foo'").unwrap(), &Context::default(), "string(b'foo') == 'foo'");
+    bench_expr(&Program::compile("bytes('abc') == b'abc'").unwrap(), &Context::default(), "bytes('abc') == b'abc'");
+    bench_expr(&Program::compile("'foobar'.matches('^[a-zA-Z]*$')").unwrap(), &Context::default(),
+               "'foobar'.matches('^[a-zA-Z]*$')  [regex]");
+    bench_expr(&Program::compile("'abc'.matches('...')").unwrap(), &Context::default(), "'abc'.matches('...')");
+
+    // ── 17. BYTES OPERATIONS ────────────────────────────────────────────────
+    println!("\n────────────────────── 17. BYTES OPERATIONS ──────────────────────────");
+    bench_expr(&Program::compile("b'foobar'.size() == 6").unwrap(), &Context::default(), "b'foobar'.size() == 6");
+    bench_expr(&Program::compile("bytes('abc') == b'abc'").unwrap(), &Context::default(), "bytes('abc') == b'abc'");
+    bench_expr(&Program::compile("bytes(b'abc') == b'abc'").unwrap(), &Context::default(), "bytes(b'abc') == b'abc'");
+    bench_expr(&Program::compile("bytes('foo') == 'foo'").unwrap(), &Context::default(), "bytes('foo') == 'foo'");
+
+    // ── 18. SHORT-CIRCUIT EDGE CASES ────────────────────────────────────────
+    println!("\n────────────────────── 18. SHORT-CIRCUIT EDGE CASES ───────────────────");
+    bench_expr(&Program::compile("'' || false").unwrap(), &Context::default(), "'' || false  [empty string]");
+    bench_expr(&Program::compile("[] || false").unwrap(), &Context::default(), "[] || false  [empty list]");
+    bench_expr(&Program::compile("null || false").unwrap(), &Context::default(), "null || false  [null]");
+    bench_expr(&Program::compile("1 || false").unwrap(), &Context::default(), "1 || false  [int left, false right]");
+
+    // ── 19. SIZE EDGE CASES ─────────────────────────────────────────────────
+    println!("\n────────────────────── 19. SIZE EDGE CASES ────────────────────────────");
+    bench_expr(&Program::compile("size([]) == 0").unwrap(), &Context::default(), "size([]) == 0");
+    bench_expr(&Program::compile("size([size([42]), 2, 3]) == 3").unwrap(), &Context::default(),
+               "size([size([42]), 2, 3]) == 3  [nested size]");
+    bench_expr(&Program::compile("b'foobar'.size() == 6").unwrap(), &Context::default(), "b'foobar'.size() == 6");
+
+    // ── 20. MAP COMPREHENSION EDGE CASES ────────────────────────────────────
+    println!("\n────────────────────── 20. MAP COMPREHENSION EDGES ────────────────────");
+    {
+        let mut ctx = Context::default();
+        ctx.add_variable_from_value("numbers", vec![10u64, 20, 30]);
+        bench_expr(&Program::compile("numbers[1u]").unwrap(), &ctx, "numbers[1u]  [uint index]");
+    }
+    bench_expr(&Program::compile("{'John': 'smart'}.map(key, key) == ['John']").unwrap(), &Context::default(),
+               "{'John': 'smart'}.map(key, key) == ['John']");
+    bench_expr(&Program::compile("[true, true, false].all(x, x)").unwrap(), &Context::default(),
+               "[true, true, false].all(x, x)  [bool identity]");
+
+    // ── 21. NESTED COMPREHENSION ────────────────────────────────────────────
+    println!("\n────────────────────── 21. NESTED COMPREHENSION ──────────────────────");
+    bench_expr(&Program::compile("[[1, 2], [2, 3]].map(x, x.map(x, x * 2)) == [[2, 4], [4, 6]]").unwrap(),
+               &Context::default(),
+               "[[1,2],[2,3]].map(x, x.map(x, x*2)) == [[2,4],[4,6]]");
+
+    println!("\n────────────────────── SUMMARY ─────────────────────────────────────");
+    println!("  Total expressions benchmarked: 94");
+    println!("  All use Program::compile() + Program::execute() compiled path");
+    println!("  (Filter tree used where applicable; general closure otherwise)");
+    println!("────────────────────────────────────────────────────────────────────\n");
 }

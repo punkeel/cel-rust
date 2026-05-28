@@ -1169,16 +1169,49 @@ fn compile_comprehension(
 #[cfg(feature = "structs")]
 fn compile_struct(
     strct: &crate::common::ast::StructExpr,
-    _reserved: &[&str],
+    reserved: &[&str],
 ) -> ValueClosure {
-    let type_name = strct.type_name.clone();
-    let _entries = strct.entries.clone();
+    use std::collections::BTreeMap;
 
-    Box::new(move |_ctx| {
-        Err(ExecutionError::InternalError(format!(
-            "struct construction for '{}' not yet available via compiled closure",
-            type_name
-        )))
+    let type_name = strct.type_name.clone();
+
+    // Compile each field value expression into a closure at compile time.
+    // (field_name, optional_flag, compiled_closure)
+    let mut field_fns: Vec<(String, bool, ValueClosure)> = Vec::new();
+    for entry in &strct.entries {
+        if let crate::common::ast::EntryExpr::StructField(sf) = &entry.expr {
+            let field_name = sf.field.clone();
+            let optional = sf.optional;
+            let val_fn = compile_expr(reserved, &sf.value.expr);
+            field_fns.push((field_name, optional, val_fn));
+        }
+        // `MapEntry` in a struct context is invalid CEL — skip silently.
+    }
+
+    Box::new(move |ctx| {
+        // Resolve the struct definition from the environment.
+        let struct_def = ctx
+            .env()
+            .find_struct(&type_name)
+            .ok_or_else(|| ExecutionError::UnexpectedType {
+                got: type_name.clone(),
+                want: String::from("known struct"),
+            })?;
+
+        // Evaluate field values and collect into BTreeMap.
+        let mut fields: BTreeMap<String, std::borrow::Cow<dyn Val>> = BTreeMap::new();
+        for (field_name, optional, val_fn) in &field_fns {
+            let val = val_fn(ctx)?;
+            // `optional` field that evaluates to Null → skip, use StructDef default.
+            if *optional && val == Value::Null {
+                continue;
+            }
+            fields.insert(field_name.clone(), to_cow(&val));
+        }
+
+        // Build and type-check via StructDef (handles defaults & error messages).
+        let cel_struct = struct_def.new_struct(fields)?;
+        Ok(Value::Struct(Arc::new(cel_struct)))
     })
 }
 
