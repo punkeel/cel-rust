@@ -32,6 +32,7 @@
 use crate::objects::Value;
 use crate::vm::compiler::{compile_expression, ValueClosure};
 use crate::vm::filter_tree::CompiledNode;
+use crate::vm::filter_tree::EvalView;
 use crate::vm::filter_tree_compiler::self;
 use crate::{ExecutionError, Expression};
 use std::collections::HashMap;
@@ -297,6 +298,18 @@ impl EvalContext {
         unsafe { &*(*self.strings.get_unchecked(idx)).as_ref() }
     }
 
+    /// Create a fast-evaluation view exposing typed arrays.
+    /// Used internally by compiled filter tree closures to bypass
+    /// Value enum matching.
+    #[inline]
+    pub fn view(&self) -> EvalView<'_> {
+        EvalView {
+            ints: &self.ints,
+            strings: &self.strings,
+            values: &self.values,
+        }
+    }
+
     /// Reset all values to `Value::Null` (retains allocation).
     #[inline]
     pub fn clear(&mut self) {
@@ -381,22 +394,18 @@ impl Filter {
             .map(|(name, _)| name.to_string())
             .collect();
 
-        let tree = filter_tree_compiler::compile_filter_tree_with_schema(
-            &expression,
-            &field_names,
-            &bool_fields,
-        )
-        .ok();
-
-        let compiled = tree.as_ref().map(|t| t.compiled.clone());
-
-        let (var_names, var_indices) = match &tree {
-            Some(t) => {
+        let (compiled, var_names, var_indices) =
+            if let Some(t) = filter_tree_compiler::compile_filter_tree_with_schema(
+                &expression,
+                &field_names,
+                &bool_fields,
+            )
+            .ok()
+            {
                 // When the tree compiled, var_names are in schema order (0..N).
                 let indices: Vec<usize> = (0..t.var_names.len()).collect();
-                (t.var_names.clone(), indices)
-            }
-            None => {
+                (Some(t.compiled), t.var_names, indices)
+            } else {
                 let names: Vec<String> = expression
                     .references()
                     .variables()
@@ -410,9 +419,8 @@ impl Filter {
                     .iter()
                     .map(|n| schema.get_field(n).map(|f| f.index()).unwrap_or(0))
                     .collect();
-                (names, indices)
-            }
-        };
+                (None, names, indices)
+            };
 
         // Compile a closure for the fallback path. When the filter tree
         // can't handle the expression (e.g. comprehensions, selects),
@@ -467,7 +475,7 @@ impl Filter {
     /// the filter tree was not compiled (use [`eval`] for fallback).
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        self.compiled.as_ref().unwrap().eval_bool(ctx.as_slice())
+        self.compiled.as_ref().unwrap().eval_bool(&ctx.view())
     }
 
     /// Variable names referenced by this filter, in index order.
