@@ -945,6 +945,13 @@ fn try_compile_int_cmp(
     }
 
     // General path: FilterNode::*Expr on both sides (supports arithmetic)
+    // Reject if both sides are bare identifiers — we can't guarantee both are ints
+    // (e.g. opaque values, strings, etc. fall through to AST for correct comparison)
+    if !matches!(left, Expr::Literal(_)) && !matches!(right, Expr::Literal(_))
+        && matches!(left, Expr::Ident(_)) && matches!(right, Expr::Ident(_))
+    {
+        return None;
+    }
     let left_expr = try_compile_i64_expr(ctx, left)?;
     let right_expr = try_compile_i64_expr(ctx, right)?;
     let f: Box<FilterNode> = match op {
@@ -1000,7 +1007,6 @@ fn try_compile_i64_expr(ctx: &mut FilterCtx, expr: &Expr) -> Option<I64Expr> {
 fn try_compile_str_expr(ctx: &mut FilterCtx, expr: &Expr) -> Option<StrExpr> {
     match expr {
         Expr::Literal(LiteralValue::String(s)) => Some(StrExpr::Literal(s.inner().to_string())),
-        Expr::Ident(name) => Some(StrExpr::Var(ctx.var_idx(name))),
         Expr::Call(call) if call.args.len() == 2 => {
             let name = call.func_name.as_str();
             if name == operators::ADD {
@@ -1017,7 +1023,7 @@ fn try_compile_str_expr(ctx: &mut FilterCtx, expr: &Expr) -> Option<StrExpr> {
 
 fn try_compile_list_expr(ctx: &mut FilterCtx, expr: &Expr) -> Option<ListExpr> {
     match expr {
-        Expr::Ident(name) => Some(ListExpr::Var(ctx.var_idx(name))),
+        Expr::Literal(LiteralValue::String(_)) | Expr::Literal(LiteralValue::Bytes(_)) => None,
         _ => None,
     }
 }

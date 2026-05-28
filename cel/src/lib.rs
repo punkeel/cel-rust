@@ -195,26 +195,29 @@ impl Program {
         Ok(Program { expression, tree, general })
     }
 
-    /// Evaluate the expression using the AST interpreter.
-    /// Always correct — uses the original AST walking logic.
-    /// For maximum performance on filter-like expressions,
-    /// use [`execute_fast`] instead, which uses the compiled closure.
-    pub fn execute(&self, context: &Context) -> ResolveResult {
-        Value::resolve(&self.expression, context)
-    }
-
-    /// Evaluate using the fastest available compiled path.
+    /// Evaluate the expression using the fastest available compiled path.
     /// ~1–6 ns for filter-like boolean expressions via filter tree.
-    /// ~50–200 ns for general expressions via compiled closure.
-    /// NEVER falls back to the slow AST interpreter.
-    /// This is the recommended method for filtering workloads.
-    pub fn execute_fast(&self, context: &Context) -> ResolveResult {
+    /// Falls back to the AST interpreter for non-filter expressions
+    /// or when variables referenced by the filter tree aren't declared.
+    pub fn execute(&self, context: &Context) -> ResolveResult {
         if let Some(ref tree) = self.tree {
+            // Verify all referenced variables exist — filter tree silently
+            // defaults undeclared vars to null, but AST correctly returns errors
+            for name in &tree.var_names {
+                if context.get_variable(name).is_none() {
+                    return Value::resolve(&self.expression, context);
+                }
+            }
             let (ints, strings) = tree.bind_typed(context);
             tree.compiled.eval_value(&ints, &strings)
         } else {
-            (self.general)(context)
+            Value::resolve(&self.expression, context)
         }
+    }
+
+    /// Alias for [`execute`] — same path.
+    pub fn execute_fast(&self, context: &Context) -> ResolveResult {
+        self.execute(context)
     }
 
     /// Returns the compiled filter tree, if the expression compiles.
