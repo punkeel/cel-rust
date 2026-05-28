@@ -60,7 +60,7 @@ impl Val for Timestamp {
 /// we need to perform our own spec-compliant overflow checks.
 ///
 /// https://github.com/google/cel-spec/blob/master/doc/langdef.md#overflow
-static MAX_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock::new(|| {
+pub(crate) static MAX_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock::new(|| {
     let naive = chrono::NaiveDate::from_ymd_opt(9999, 12, 31)
         .unwrap()
         .and_hms_nano_opt(23, 59, 59, 999_999_999)
@@ -70,7 +70,7 @@ static MAX_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock
         .from_utc_datetime(&naive)
 });
 
-static MIN_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock::new(|| {
+pub(crate) static MIN_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock::new(|| {
     let naive = chrono::NaiveDate::from_ymd_opt(1, 1, 1)
         .unwrap()
         .and_hms_opt(0, 0, 0)

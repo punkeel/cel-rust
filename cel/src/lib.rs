@@ -202,16 +202,16 @@ impl Program {
     pub fn execute(&self, context: &Context) -> ResolveResult {
         if let Some(ref tree) = self.tree {
             // Verify all referenced variables exist — filter tree silently
-            // defaults undeclared vars to null, but AST correctly returns errors
+            // defaults undeclared vars to null, but we must return errors
             for name in &tree.var_names {
                 if context.get_variable(name).is_none() {
-                    return Value::resolve(&self.expression, context);
+                    return (self.general)(context);
                 }
             }
             let (ints, strings) = tree.bind_typed(context);
             tree.compiled.eval_value(&ints, &strings)
         } else {
-            Value::resolve(&self.expression, context)
+            (self.general)(context)
         }
     }
 

@@ -245,15 +245,30 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                 let left = compile_expr(reserved, &call.args[0].expr);
                 let right = compile_expr(reserved, &call.args[1].expr);
                 return Box::new(move |ctx| {
-                    let l = left(ctx)?;
-                    if let Value::Bool(true) = l {
-                        return Ok(Value::Bool(true));
-                    }
-                    let r = right(ctx)?;
-                    match (l, r) {
-                        (Value::Bool(false), Value::Bool(b)) => Ok(Value::Bool(b)),
-                        (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
-                        _ => Err(ExecutionError::NoSuchOverload),
+                    let l = left(ctx);
+                    // CEL try_bool: extract bool or treat as error
+                    match l {
+                        Ok(Value::Bool(true)) => return Ok(Value::Bool(true)),
+                        Ok(Value::Bool(false)) => {
+                            // Left false: return right (which must be bool)
+                            match right(ctx) {
+                                Ok(v @ Value::Bool(_)) => return Ok(v),
+                                Ok(_) => return Err(ExecutionError::NoSuchOverload),
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        Ok(_) | Err(_) => {
+                            // Left error or non-bool: short-circuit if right is true
+                            let l_err = l.err();
+                            match right(ctx) {
+                                Ok(Value::Bool(true)) => return Ok(Value::Bool(true)),
+                                Ok(Value::Bool(false)) => {
+                                    return Err(l_err.unwrap_or(ExecutionError::NoSuchOverload));
+                                }
+                                Ok(_) => return Err(ExecutionError::NoSuchOverload),
+                                Err(e) => return Err(e),
+                            }
+                        }
                     }
                 });
             }
@@ -261,15 +276,30 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                 let left = compile_expr(reserved, &call.args[0].expr);
                 let right = compile_expr(reserved, &call.args[1].expr);
                 return Box::new(move |ctx| {
-                    let l = left(ctx)?;
-                    if let Value::Bool(false) = l {
-                        return Ok(Value::Bool(false));
-                    }
-                    let r = right(ctx)?;
-                    match (l, r) {
-                        (Value::Bool(true), Value::Bool(b)) => Ok(Value::Bool(b)),
-                        (Value::Bool(_), Value::Bool(b)) => Ok(Value::Bool(b)),
-                        _ => Err(ExecutionError::NoSuchOverload),
+                    let l = left(ctx);
+                    // CEL try_bool: extract bool or treat as error
+                    match l {
+                        Ok(Value::Bool(false)) => return Ok(Value::Bool(false)),
+                        Ok(Value::Bool(true)) => {
+                            // Left true: return right (which must be bool)
+                            match right(ctx) {
+                                Ok(v @ Value::Bool(_)) => return Ok(v),
+                                Ok(_) => return Err(ExecutionError::NoSuchOverload),
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        Ok(_) | Err(_) => {
+                            // Left error or non-bool: short-circuit if right is false
+                            let l_err = l.err();
+                            match right(ctx) {
+                                Ok(Value::Bool(false)) => return Ok(Value::Bool(false)),
+                                Ok(Value::Bool(true)) => {
+                                    return Err(l_err.unwrap_or(ExecutionError::NoSuchOverload));
+                                }
+                                Ok(_) => return Err(ExecutionError::NoSuchOverload),
+                                Err(e) => return Err(e),
+                            }
+                        }
                     }
                 });
             }
@@ -301,7 +331,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                     let result = match (&lhs, &rhs) {
                         (Value::Int(l), Value::Int(r)) => l < r,
                         (Value::UInt(l), Value::UInt(r)) => l < r,
-                        (Value::Float(l), Value::Float(r)) => l < r,
+                        (Value::Float(l), Value::Float(r)) => {
+                            if l.is_nan() || r.is_nan() {
+                                return Err(ExecutionError::ValuesNotComparable(lhs, rhs));
+                            }
+                            l < r
+                        }
                         (Value::String(l), Value::String(r)) => l.as_ref() < r.as_ref(),
                         (Value::Bool(l), Value::Bool(r)) => l < r,
                         _ => {
@@ -324,7 +359,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                     let result = match (&lhs, &rhs) {
                         (Value::Int(l), Value::Int(r)) => l <= r,
                         (Value::UInt(l), Value::UInt(r)) => l <= r,
-                        (Value::Float(l), Value::Float(r)) => l <= r,
+                        (Value::Float(l), Value::Float(r)) => {
+                            if l.is_nan() || r.is_nan() {
+                                return Err(ExecutionError::ValuesNotComparable(lhs, rhs));
+                            }
+                            l <= r
+                        }
                         (Value::String(l), Value::String(r)) => l.as_ref() <= r.as_ref(),
                         (Value::Bool(l), Value::Bool(r)) => l <= r,
                         _ => {
@@ -347,7 +387,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                     let result = match (&lhs, &rhs) {
                         (Value::Int(l), Value::Int(r)) => l > r,
                         (Value::UInt(l), Value::UInt(r)) => l > r,
-                        (Value::Float(l), Value::Float(r)) => l > r,
+                        (Value::Float(l), Value::Float(r)) => {
+                            if l.is_nan() || r.is_nan() {
+                                return Err(ExecutionError::ValuesNotComparable(lhs, rhs));
+                            }
+                            l > r
+                        }
                         (Value::String(l), Value::String(r)) => l.as_ref() > r.as_ref(),
                         (Value::Bool(l), Value::Bool(r)) => l > r,
                         _ => {
@@ -370,7 +415,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                     let result = match (&lhs, &rhs) {
                         (Value::Int(l), Value::Int(r)) => l >= r,
                         (Value::UInt(l), Value::UInt(r)) => l >= r,
-                        (Value::Float(l), Value::Float(r)) => l >= r,
+                        (Value::Float(l), Value::Float(r)) => {
+                            if l.is_nan() || r.is_nan() {
+                                return Err(ExecutionError::ValuesNotComparable(lhs, rhs));
+                            }
+                            l >= r
+                        }
                         (Value::String(l), Value::String(r)) => l.as_ref() >= r.as_ref(),
                         (Value::Bool(l), Value::Bool(r)) => l >= r,
                         _ => {
@@ -422,12 +472,24 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         }
                         #[cfg(feature = "chrono")]
                         (Value::Timestamp(l), Value::Duration(r)) => {
-                            Ok(Value::Timestamp(*l + *r))
+                            let result = *l + *r;
+                            if result > *crate::common::types::timestamp::MAX_TIMESTAMP
+                                || result < *crate::common::types::timestamp::MIN_TIMESTAMP
+                            {
+                                return Err(ExecutionError::Overflow("add", lhs, rhs));
+                            }
+                            Ok(Value::Timestamp(result))
                         }
                         #[cfg(feature = "chrono")]
                         (Value::Duration(l), Value::Timestamp(r)) => {
                             // chrono: DateTime + Duration, not Duration + DateTime
-                            Ok(Value::Timestamp(*r + *l))
+                            let result = *r + *l;
+                            if result > *crate::common::types::timestamp::MAX_TIMESTAMP
+                                || result < *crate::common::types::timestamp::MIN_TIMESTAMP
+                            {
+                                return Err(ExecutionError::Overflow("add", lhs, rhs));
+                            }
+                            Ok(Value::Timestamp(result))
                         }
                         _ => {
                             let lcow = to_cow(&lhs);
@@ -469,7 +531,13 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         }
                         #[cfg(feature = "chrono")]
                         (Value::Timestamp(l), Value::Duration(r)) => {
-                            Ok(Value::Timestamp(*l - *r))
+                            let result = *l - *r;
+                            if result > *crate::common::types::timestamp::MAX_TIMESTAMP
+                                || result < *crate::common::types::timestamp::MIN_TIMESTAMP
+                            {
+                                return Err(ExecutionError::Overflow("sub", lhs, rhs));
+                            }
+                            Ok(Value::Timestamp(result))
                         }
                         #[cfg(feature = "chrono")]
                         (Value::Duration(l), Value::Duration(r)) => {
@@ -533,7 +601,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         (Value::Int(_), Value::Int(0)) => {
                             Err(ExecutionError::DivisionByZero(lhs))
                         }
-                        (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l / r)),
+                        (Value::Int(l), Value::Int(r)) => {
+                            let res = l
+                                .checked_div(*r)
+                                .ok_or(ExecutionError::Overflow("div", lhs, rhs))?;
+                            Ok(Value::Int(res))
+                        }
                         (Value::UInt(_), Value::UInt(0)) => {
                             Err(ExecutionError::DivisionByZero(lhs))
                         }
@@ -563,7 +636,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                         (Value::Int(_), Value::Int(0)) => {
                             Err(ExecutionError::RemainderByZero(lhs))
                         }
-                        (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l % r)),
+                        (Value::Int(l), Value::Int(r)) => {
+                            let res = l
+                                .checked_rem(*r)
+                                .ok_or(ExecutionError::Overflow("rem", lhs, rhs))?;
+                            Ok(Value::Int(res))
+                        }
                         (Value::UInt(_), Value::UInt(0)) => {
                             Err(ExecutionError::RemainderByZero(lhs))
                         }
@@ -1036,7 +1114,13 @@ fn compile_comprehension(
                     }
                 },
                 None => {
-                    let cow: Box<dyn Val> = item.clone().try_into()
+                    let key_val = match item {
+                        Value::List(pair) if pair.len() >= 2 => pair[0].clone(),
+                        _ => item.clone(),
+                    };
+                    let cow: Box<dyn Val> = key_val
+                        .clone()
+                        .try_into()
                         .unwrap_or_else(|_| Box::new(CelNull) as Box<dyn Val>);
                     inner.add_variable_as_val(&iter_var, cow);
                 }
@@ -1391,5 +1475,75 @@ mod tests {
         ctx.add_variable_from_value("y", 20i64);
         let result = test_compile("(x + y) * 2", Some(ctx)).unwrap();
         assert_eq!(result, Value::Int(60));
+    }
+
+    // ── Comprehension tests ──
+
+    #[test]
+    fn test_comprehension_all_basic() {
+        let result = test_compile("[0, 1, 2].all(x, x >= 0)", None).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_comprehension_all_false() {
+        let result = test_compile("[0, -1, 2].all(x, x >= 0)", None).unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_comprehension_all_identity() {
+        let result = test_compile("[true, true, true].all(x, x)", None).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_comprehension_all_identity_false() {
+        let result = test_compile("[true, true, false].all(x, x)", None).unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_comprehension_exists_basic() {
+        let result = test_compile("[0, 1, 2].exists(x, x > 1)", None).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_comprehension_exists_false() {
+        let result = test_compile("[0, 1, 2].exists(x, x > 5)", None).unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_comprehension_matches_literal() {
+        let result = test_compile("'abc'.matches('...')", None).unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_comprehension_matches_in_comprehension() {
+        let result = test_compile("{'1': 'abc', '2': 'def', '3': 'ghi'}.all(key, key.matches('...'))", None);
+        match &result {
+            Ok(v) => assert_eq!(*v, Value::Bool(false)),
+            Err(e) => panic!("Expected Ok but got Err({:?})", e),
+        }
+    }
+
+    #[test]
+    fn test_comprehension_matches_simple() {
+        // Simpler version to debug
+        let result = test_compile("['abc'].all(x, x.matches('...'))", None);
+        match &result {
+            Ok(v) => assert_eq!(*v, Value::Bool(true)),
+            Err(e) => panic!("Expected Ok but got Err({:?})", e),
+        }
+    }
+
+    #[test]
+    fn test_contains_in_comprehension() {
+        // Test contains which is NOT gated behind regex feature
+        let result = test_compile("['abc'].all(x, x.contains('a'))", None).unwrap();
+        assert_eq!(result, Value::Bool(true));
     }
 }
