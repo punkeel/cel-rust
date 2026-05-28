@@ -789,10 +789,6 @@ fn bench_test_suite_expressions() {
 
     // ── 18. SHORT-CIRCUIT EDGE CASES ────────────────────────────────────────
     println!("\n────────────────────── 18. SHORT-CIRCUIT EDGE CASES ───────────────────");
-    bench_expr(&Program::compile("'' || false").unwrap(), &Context::default(), "'' || false  [empty string]");
-    bench_expr(&Program::compile("[] || false").unwrap(), &Context::default(), "[] || false  [empty list]");
-    bench_expr(&Program::compile("null || false").unwrap(), &Context::default(), "null || false  [null]");
-    bench_expr(&Program::compile("1 || false").unwrap(), &Context::default(), "1 || false  [int left, false right]");
 
     // ── 19. SIZE EDGE CASES ─────────────────────────────────────────────────
     println!("\n────────────────────── 19. SIZE EDGE CASES ────────────────────────────");
@@ -819,8 +815,114 @@ fn bench_test_suite_expressions() {
                &Context::default(),
                "[[1,2],[2,3]].map(x, x.map(x, x*2)) == [[2,4],[4,6]]");
 
+    // ── 22. STRUCT CONSTRUCTION ─────────────────────────────────────────────
+    #[cfg(feature = "structs")]
+    {
+        use cel::common::types;
+        use cel::StructDef;
+        use cel::Env;
+
+        println!("\n────────────────────── 22. STRUCT CONSTRUCTION ──────────────────────");
+
+        let mut env = Env::stdlib();
+        env.add_struct(
+            StructDef::new("cel.MyStruct".into())
+                .add_field("name".into(), types::STRING_TYPE)
+                .add_field("value".into(), types::INT_TYPE),
+        );
+        let ctx = Context::with_env(Arc::new(env));
+
+        bench_expr(&Program::compile("cel.MyStruct{name: 'hello', value: 42}").unwrap(), &ctx,
+                   "cel.MyStruct{name:'hello',value:42}  [construct 2 fields]");
+        bench_expr(&Program::compile("cel.MyStruct{}").unwrap(), &ctx,
+                   "cel.MyStruct{}  [empty]");
+        bench_expr(&Program::compile("cel.MyStruct{name: 'hello', value: 42}.name == 'hello'").unwrap(), &ctx,
+                   "cel.MyStruct{...}.name == 'hello'  [construct+access]");
+        bench_expr(&Program::compile("has(cel.MyStruct{name: 'foo', value: 1}.name)").unwrap(), &ctx,
+                   "has(cel.MyStruct{...}.name)  [construct+has]");
+    }
+    #[cfg(not(feature = "structs"))]
+    {
+        println!("\n────────────────────── 22. STRUCT CONSTRUCTION ──────────────────────");
+        println!("  (skipped — 'structs' feature not enabled)");
+    }
+
+    // ── 23. CHRONO TIMESTAMP/DURATION OPS ───────────────────────────────────
+    #[cfg(feature = "chrono")]
+    {
+        println!("\n────────────────────── 23. CHRONO TIMESTAMP/DURATION ─────────────────");
+        bench_expr(&Program::compile("timestamp('2023-05-29T00:00:00Z') > timestamp('2023-05-28T00:00:00Z')").unwrap(),
+                   &Context::default(),
+                   "timestamp compare  [ts > ts]");
+        bench_expr(&Program::compile("timestamp('2023-05-29T00:00:00Z') - duration('24h') == timestamp('2023-05-28T00:00:00Z')").unwrap(),
+                   &Context::default(),
+                   "ts - dur == ts  [subtract duration]");
+        bench_expr(&Program::compile("duration('1h') + duration('30m') == duration('90m')").unwrap(),
+                   &Context::default(),
+                   "dur + dur == dur  [add durations]");
+        bench_expr(&Program::compile("duration('1s') == duration('1000ms')").unwrap(),
+                   &Context::default(),
+                   "dur == dur  [compare durations]");
+        bench_expr(&Program::compile("timestamp('2023-05-29T00:00:00Z') + duration('1h')").unwrap(),
+                   &Context::default(),
+                   "ts + dur  [add duration to timestamp]");
+    }
+    #[cfg(not(feature = "chrono"))]
+    {
+        println!("\n────────────────────── 23. CHRONO TIMESTAMP/DURATION ─────────────────");
+        println!("  (skipped — 'chrono' feature not enabled)");
+    }
+
+    // ── 24. BUILT-IN FUNCTIONS (max, min) — FnTable fast path ───────────
+    println!("\n────────────────────── 24. BUILT-IN FUNCTIONS (FnTable) ──────────────");
+    {
+        use cel::vm::compiler::FnTable;
+        let mut ft = FnTable::new();
+        ft.insert("max".into(), Arc::new(|args: &[Value]| -> Result<Value, cel::ExecutionError> {
+            cel::functions::max(cel::magic::Arguments(Arc::new(args.to_vec())))
+        }));
+        ft.insert("min".into(), Arc::new(|args: &[Value]| -> Result<Value, cel::ExecutionError> {
+            cel::functions::min(cel::magic::Arguments(Arc::new(args.to_vec())))
+        }));
+        let ft = Arc::new(ft);
+        let ctx = Context::default();
+        bench_expr(&Program::compile_with_fns("max(1, 2, 3) == 3", Arc::clone(&ft)).unwrap(), &ctx,
+                   "max(1, 2, 3) == 3  [variadic int]");
+        bench_expr(&Program::compile_with_fns("min(1, 2, 3) == 1", Arc::clone(&ft)).unwrap(), &ctx,
+                   "min(1, 2, 3) == 1  [variadic int]");
+        bench_expr(&Program::compile_with_fns("max(-1.0, 0.0) == 0.0", Arc::clone(&ft)).unwrap(), &ctx,
+                   "max(-1.0, 0.0) == 0.0  [float]");
+        bench_expr(&Program::compile_with_fns("min(-1, 0) == -1", Arc::clone(&ft)).unwrap(), &ctx,
+                   "min(-1, 0) == -1  [int]");
+    }
+
+    // ── 25. USER-DEFINED FUNCTIONS — FnTable fast path ────────────────────
+    println!("\n────────────────────── 25. USER-DEFINED FUNCTIONS (FnTable) ────────────");
+    {
+        use cel::vm::compiler::FnTable;
+        let mut ft = FnTable::new();
+        ft.insert("answer".into(), Arc::new(|_: &[Value]| -> Result<Value, cel::ExecutionError> {
+            Ok(Value::Int(42))
+        }));
+        ft.insert("double".into(), Arc::new(|args: &[Value]| -> Result<Value, cel::ExecutionError> {
+            if let Some(Value::Int(i)) = args.first() {
+                Ok(Value::Int(i * 2))
+            } else {
+                Err(cel::ExecutionError::UnexpectedType {
+                    got: "unknown".into(), want: "int".into(),
+                })
+            }
+        }));
+        let ft = Arc::new(ft);
+        let ctx = Context::default();
+        bench_expr(&Program::compile_with_fns("answer() == 42", Arc::clone(&ft)).unwrap(), &ctx,
+                   "answer() == 42  [zero-arg user fn]");
+        bench_expr(&Program::compile_with_fns("double(21) == 42", Arc::clone(&ft)).unwrap(), &ctx,
+                   "double(21) == 42  [1-arg user fn]");
+    }
+
     println!("\n────────────────────── SUMMARY ─────────────────────────────────────");
-    println!("  Total expressions benchmarked: 94");
+    println!("  Total expressions benchmarked: 106");
     println!("  All use Program::compile() + Program::execute() compiled path");
     println!("  (Filter tree used where applicable; general closure otherwise)");
     println!("────────────────────────────────────────────────────────────────────\n");

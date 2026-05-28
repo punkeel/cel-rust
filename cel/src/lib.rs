@@ -22,7 +22,7 @@ pub use objects::{ResolveResult, Value};
 use parser::{Expression, ExpressionReferences, Parser};
 pub use parser::{ParseError, ParseErrors};
 pub mod functions;
-mod magic;
+pub mod magic;
 pub mod objects;
 mod resolvers;
 
@@ -178,7 +178,7 @@ impl Program {
         let parser = Parser::default();
         let expression = parser.parse(source)?;
         let tree = vm::compile_filter_tree(&expression).ok();
-        let general = vm::compiler::compile_expression(&expression, &[]);
+        let general = vm::compiler::compile_expression(&expression, &[], None);
         Ok(Program { expression, tree, general })
     }
 
@@ -191,8 +191,32 @@ impl Program {
         let resolver = crate::function_handle::FunctionResolver::new(env);
         crate::function_handle::resolve_ast(&mut expression, &resolver);
         let tree = vm::compile_filter_tree(&expression).ok();
-        let general = vm::compiler::compile_expression(&expression, &[]);
+        let general = vm::compiler::compile_expression(&expression, &[], None);
         Ok(Program { expression, tree, general })
+    }
+
+    /// Compile with a compile-time function table.
+    ///
+    /// Functions registered here are resolved by name at compile time,
+    /// eliminating the runtime `ctx.get_function()` lookup and the
+    /// `to_cow()`/`FunctionContext` overhead — matching wirefilter's
+    /// architecture of resolving functions during compilation.
+    ///
+    /// The `function_table` is an `Arc`-wrapped
+    /// [`vm::compiler::FnTable`] shared across all compiled closures.
+    pub fn compile_with_fns(
+        source: &str,
+        function_table: Arc<vm::compiler::FnTable>,
+    ) -> Result<Program, ParseErrors> {
+        let parser = Parser::default();
+        let expression = parser.parse(source)?;
+        let tree = vm::compile_filter_tree(&expression).ok();
+        let general = vm::compiler::compile_expression(&expression, &[], Some(&function_table));
+        Ok(Program {
+            expression,
+            tree,
+            general,
+        })
     }
 
     /// Evaluate the expression using the fastest available compiled path.

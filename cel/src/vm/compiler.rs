@@ -44,6 +44,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Arc;
 
+/// A pre-resolved function that takes raw `Value` slices — no `to_cow`,
+/// no `FunctionContext` overhead. Resolved at compile time.
+pub type RawFunction = Arc<dyn Fn(&[Value]) -> Result<Value, ExecutionError> + Send + Sync>;
+
+/// Compile-time function table: name → resolved function pointer.
+/// Set once, captured by compiled closures for zero-runtime-lookup dispatch.
+pub type FnTable = HashMap<String, RawFunction>;
+
 /// A compiled CEL expression closure.
 ///
 /// Takes a reference to the evaluation [`Context`] and returns either
@@ -56,34 +64,59 @@ pub type ValueClosure = Box<dyn Fn(&Context) -> Result<Value, ExecutionError>>;
 /// external binding — typically used by the Schema/fast-path pipeline.
 /// For standalone use, pass an empty slice.
 ///
+/// `functions` is an optional compile-time function table. Functions
+/// registered here are resolved by name at compile time — the closure
+/// captures the function pointer directly, eliminating the runtime
+/// `ctx.get_function()` lookup and `to_cow()`/`FunctionContext` overhead.
+/// Pass `None` for the default runtime-dispatch path.
+///
 /// The returned closure captures **everything** needed for evaluation.
 /// It is `'static` and can be sent across threads.
-pub fn compile_expression(expr: &Expression, reserved_names: &[&str]) -> ValueClosure {
+pub fn compile_expression(
+    expr: &Expression,
+    reserved_names: &[&str],
+    functions: Option<&FnTable>,
+) -> ValueClosure {
     let owned: Vec<String> = reserved_names.iter().map(|s| s.to_string()).collect();
     let reserved: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-    compile_expr(&reserved, &expr.expr)
+    compile_expr(&reserved, &expr.expr, functions)
+}
+
+/// Helper: compile with owned string slice view.
+/// Converts `&[String]` to `&[&str]` and delegates to `compile_expr`.
+fn compile_expr_strs(
+    names: &[String],
+    expr: &Expr,
+    functions: Option<&FnTable>,
+) -> ValueClosure {
+    let r: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    compile_expr(&r, expr, functions)
 }
 
 // ─── Entry point — compile a single Expr node ──────────────────────────
 
-fn compile_expr(reserved: &[&str], expr: &Expr) -> ValueClosure {
+fn compile_expr(reserved: &[&str], expr: &Expr, functions: Option<&FnTable>) -> ValueClosure {
     match expr {
         Expr::Literal(lit) => compile_literal(lit),
         Expr::Ident(name) => compile_ident(name),
-        Expr::Select(sel) => compile_select(sel, reserved),
-        Expr::Call(call) => compile_call(call, reserved),
-        Expr::List(list) => compile_list(list, reserved),
-        Expr::Map(map) => compile_map(map, reserved),
-        Expr::Comprehension(comp) => compile_comprehension(comp, reserved),
-        Expr::Struct(strct) => compile_struct(strct, reserved),
+        Expr::Select(sel) => compile_select(sel, reserved, functions),
+        Expr::Call(call) => compile_call(call, reserved, functions),
+        Expr::List(list) => compile_list(list, reserved, functions),
+        Expr::Map(map) => compile_map(map, reserved, functions),
+        Expr::Comprehension(comp) => compile_comprehension(comp, reserved, functions),
+        Expr::Struct(strct) => compile_struct(strct, reserved, functions),
         Expr::Unspecified => Box::new(|_| Ok(Value::Null)),
     }
 }
 
 /// Helper: compile a list of `IdedExpr` arguments into closures.
-fn compile_arg_list<'a>(reserved: &[&str], args: &[IdedExpr]) -> Vec<ValueClosure> {
+fn compile_arg_list<'a>(
+    reserved: &[&str],
+    args: &[IdedExpr],
+    functions: Option<&FnTable>,
+) -> Vec<ValueClosure> {
     args.iter()
-        .map(|a| compile_expr(reserved, &a.expr))
+        .map(|a| compile_expr(reserved, &a.expr, functions))
         .collect()
 }
 
@@ -146,8 +179,8 @@ fn compile_ident(name: &str) -> ValueClosure {
 
 // ─── Member access (Select) ────────────────────────────────────────────
 
-fn compile_select(sel: &SelectExpr, reserved: &[&str]) -> ValueClosure {
-    let operand_fn = compile_expr(reserved, &sel.operand.expr);
+fn compile_select(sel: &SelectExpr, reserved: &[&str], functions: Option<&FnTable>) -> ValueClosure {
+    let operand_fn = compile_expr(reserved, &sel.operand.expr, functions);
     let field = sel.field.clone();
     let is_test = sel.test;
 
@@ -175,16 +208,16 @@ fn compile_select(sel: &SelectExpr, reserved: &[&str]) -> ValueClosure {
 
 // ─── Call / function dispatch ──────────────────────────────────────────
 
-fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> ValueClosure {
+fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str], functions: Option<&FnTable>) -> ValueClosure {
     let name_str = call.func_name.clone();
     let name = name_str.as_str();
     let arity = call.args.len();
 
     // ── Ternary (conditional) ──
     if arity == 3 && name == operators::CONDITIONAL {
-        let cond = compile_expr(reserved, &call.args[0].expr);
-        let t = compile_expr(reserved, &call.args[1].expr);
-        let f = compile_expr(reserved, &call.args[2].expr);
+        let cond = compile_expr(reserved, &call.args[0].expr, functions);
+        let t = compile_expr(reserved, &call.args[1].expr, functions);
+        let f = compile_expr(reserved, &call.args[2].expr, functions);
         return Box::new(move |ctx| {
             let c = cond(ctx)?;
             match c {
@@ -197,7 +230,7 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
 
     // ── Unary operators ──
     if arity == 1 {
-        let inner = compile_expr(reserved, &call.args[0].expr);
+        let inner = compile_expr(reserved, &call.args[0].expr, functions);
         match name {
             operators::LOGICAL_NOT => {
                 return Box::new(move |ctx| {
@@ -242,8 +275,8 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
     if arity == 2 {
         match name {
             operators::LOGICAL_OR => {
-                let left = compile_expr(reserved, &call.args[0].expr);
-                let right = compile_expr(reserved, &call.args[1].expr);
+                let left = compile_expr(reserved, &call.args[0].expr, functions);
+                let right = compile_expr(reserved, &call.args[1].expr, functions);
                 return Box::new(move |ctx| {
                     let l = left(ctx);
                     // CEL try_bool: extract bool or treat as error
@@ -273,8 +306,8 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
                 });
             }
             operators::LOGICAL_AND => {
-                let left = compile_expr(reserved, &call.args[0].expr);
-                let right = compile_expr(reserved, &call.args[1].expr);
+                let left = compile_expr(reserved, &call.args[0].expr, functions);
+                let right = compile_expr(reserved, &call.args[1].expr, functions);
                 return Box::new(move |ctx| {
                     let l = left(ctx);
                     // CEL try_bool: extract bool or treat as error
@@ -306,8 +339,8 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
             _ => {}
         }
 
-        let lhs_fn = compile_expr(reserved, &call.args[0].expr);
-        let rhs_fn = compile_expr(reserved, &call.args[1].expr);
+        let lhs_fn = compile_expr(reserved, &call.args[0].expr, functions);
+        let rhs_fn = compile_expr(reserved, &call.args[1].expr, functions);
 
         match name {
             operators::EQUALS => {
@@ -817,9 +850,24 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
         }
     }
 
+    // ── Pre-resolved function from compile-time FnTable ──
+    if let Some(table) = functions {
+        if let Some(func) = table.get(&call.func_name) {
+            let func = Arc::clone(func);
+            let arg_fns = compile_arg_list(reserved, &call.args, functions);
+            return Box::new(move |ctx| {
+                let mut args = Vec::with_capacity(arg_fns.len());
+                for arg_fn in &arg_fns {
+                    args.push(arg_fn(ctx)?);
+                }
+                func(&args)
+            });
+        }
+    }
+
     // ── General function dispatch (non-operator) ──
 
-    let arg_fns = compile_arg_list(reserved, &call.args);
+    let arg_fns = compile_arg_list(reserved, &call.args, functions);
     let func_name = call.func_name.clone();
     let resolved_op = call.resolved_op;
 
@@ -860,7 +908,7 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
             })
         }
         Some(target) => {
-            let target_fn = compile_expr(reserved, &target.expr);
+            let target_fn = compile_expr(reserved, &target.expr, functions);
 
             match &target.expr {
                 Expr::Ident(ref prefix) => {
@@ -972,11 +1020,12 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str]) -> Value
 fn compile_list(
     list: &crate::common::ast::ListExpr,
     reserved: &[&str],
+    functions: Option<&FnTable>,
 ) -> ValueClosure {
     let elem_fns: Vec<ValueClosure> = list
         .elements
         .iter()
-        .map(|e| compile_expr(reserved, &e.expr))
+        .map(|e| compile_expr(reserved, &e.expr, functions))
         .collect();
     let optional_indices = list.optional_indices.clone();
 
@@ -1007,13 +1056,14 @@ fn compile_list(
 fn compile_map(
     map: &crate::common::ast::MapExpr,
     reserved: &[&str],
+    functions: Option<&FnTable>,
 ) -> ValueClosure {
     let mut key_val_pairs: Vec<(ValueClosure, ValueClosure, bool)> = Vec::new();
     for entry in &map.entries {
         match &entry.expr {
             EntryExpr::MapEntry(e) => {
-                let key_fn = compile_expr(reserved, &e.key.expr);
-                let val_fn = compile_expr(reserved, &e.value.expr);
+                let key_fn = compile_expr(reserved, &e.key.expr, functions);
+                let val_fn = compile_expr(reserved, &e.value.expr, functions);
                 key_val_pairs.push((key_fn, val_fn, e.optional));
             }
             EntryExpr::StructField(_) => {}
@@ -1057,13 +1107,14 @@ fn compile_map(
 fn compile_comprehension(
     comp: &crate::common::ast::ComprehensionExpr,
     reserved: &[&str],
+    functions: Option<&FnTable>,
 ) -> ValueClosure {
     let iter_var = comp.iter_var.clone();
     let iter_var2 = comp.iter_var2.clone();
     let accu_var = comp.accu_var.clone();
 
-    let iter_range_fn = compile_expr(reserved, &comp.iter_range.expr);
-    let accu_init_fn = compile_expr(reserved, &comp.accu_init.expr);
+    let iter_range_fn = compile_expr(reserved, &comp.iter_range.expr, functions);
+    let accu_init_fn = compile_expr(reserved, &comp.accu_init.expr, functions);
 
     let loop_cond_expr = comp.loop_cond.expr.clone();
     let loop_step_expr = comp.loop_step.expr.clone();
@@ -1071,6 +1122,13 @@ fn compile_comprehension(
 
     // Clone reserved into owned strings so the closure is 'static
     let owned_reserved: Vec<String> = reserved.iter().map(|s| s.to_string()).collect();
+
+    // Compile inner expressions OUTSIDE the closure — cannot capture `functions`
+    // (a borrowed reference) inside a 'static closure.
+    let owned_r_names: Vec<String> = owned_reserved.clone();
+    let loop_cond_fn = compile_expr_strs(&owned_r_names, &loop_cond_expr, functions);
+    let loop_step_fn = compile_expr_strs(&owned_r_names, &loop_step_expr, functions);
+    let result_fn = compile_expr_strs(&owned_r_names, &result_expr, functions);
 
     Box::new(move |ctx| {
         let init_val = accu_init_fn(ctx)?;
@@ -1096,9 +1154,6 @@ fn compile_comprehension(
         };
 
         let mut accu = init_val;
-
-        // Convert owned_reserved back to &str for compile_expr calls
-        let r_names: Vec<&str> = owned_reserved.iter().map(|s| s.as_str()).collect();
 
         for item in &items {
             let mut inner = ctx.new_inner_scope();
@@ -1141,8 +1196,7 @@ fn compile_comprehension(
                 .unwrap_or_else(|_| Box::new(CelNull) as Box<dyn Val>);
             inner.add_variable_as_val(&accu_var, accu_cow);
 
-            let cond_fn = compile_expr(&r_names, &loop_cond_expr);
-            let cond_val = cond_fn(&inner)?;
+            let cond_val = loop_cond_fn(&inner)?;
             let should_continue = match cond_val {
                 Value::Bool(b) => b,
                 _ => break,
@@ -1151,15 +1205,13 @@ fn compile_comprehension(
                 break;
             }
 
-            let step_fn = compile_expr(&r_names, &loop_step_expr);
-            accu = step_fn(&inner)?;
+            accu = loop_step_fn(&inner)?;
         }
 
         let mut final_ctx = ctx.new_inner_scope();
         let final_accu_cow: Box<dyn Val> = accu.clone().try_into()
             .unwrap_or_else(|_| Box::new(CelNull) as Box<dyn Val>);
         final_ctx.add_variable_as_val(&accu_var, final_accu_cow);
-        let result_fn = compile_expr(&r_names, &result_expr);
         result_fn(&final_ctx)
     })
 }
@@ -1170,6 +1222,7 @@ fn compile_comprehension(
 fn compile_struct(
     strct: &crate::common::ast::StructExpr,
     reserved: &[&str],
+    functions: Option<&FnTable>,
 ) -> ValueClosure {
     use std::collections::BTreeMap;
 
@@ -1182,7 +1235,7 @@ fn compile_struct(
         if let crate::common::ast::EntryExpr::StructField(sf) = &entry.expr {
             let field_name = sf.field.clone();
             let optional = sf.optional;
-            let val_fn = compile_expr(reserved, &sf.value.expr);
+            let val_fn = compile_expr(reserved, &sf.value.expr, functions);
             field_fns.push((field_name, optional, val_fn));
         }
         // `MapEntry` in a struct context is invalid CEL — skip silently.
@@ -1219,6 +1272,7 @@ fn compile_struct(
 fn compile_struct(
     strct: &crate::common::ast::StructExpr,
     _reserved: &[&str],
+    _functions: Option<&FnTable>,
 ) -> ValueClosure {
     let name = strct.type_name.clone();
     Box::new(move |_| {
@@ -1239,7 +1293,7 @@ mod tests {
 
     fn test_compile(script: &str, ctx: Option<Context>) -> Result<Value, ExecutionError> {
         let program = Program::compile(script).expect("parse failed");
-        let closure = compile_expression(&program.expression(), &[]);
+        let closure = compile_expression(&program.expression(), &[], None);
         let ctx = ctx.unwrap_or_default();
         closure(&ctx)
     }

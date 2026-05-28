@@ -1,4 +1,4 @@
-pub(crate) mod compiler;
+pub mod compiler;
 pub mod filter_tree;
 pub mod filter_tree_compiler;
 
