@@ -2,7 +2,7 @@ use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
 use crate::common::types::CelBool;
 use crate::objects::Value;
-use crate::vm::filter_tree::{FilterNode, FnCallPtr, I64Expr, ListExpr, StrExpr};
+use crate::vm::filter_tree::{FilterNode, FnArg, FnCallPtr, I64Expr, ListExpr, StrExpr};
 use crate::{ExecutionError, Expression};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -888,13 +888,20 @@ fn try_compile_fn_call_int_cmp(
     };
     // Look up the function in FnTable
     let func = functions.get(&call.func_name)?;
-    // Check that all arguments are simple variables
-    let mut arg_idxs = Vec::with_capacity(call.args.len());
+    // Resolve arguments: each can be a variable or a constant
+    let mut args = Vec::with_capacity(call.args.len());
     for arg in &call.args {
-        let idx = resolve_var(ctx, &arg.expr)?;
-        arg_idxs.push(idx);
+        if let Some(idx) = resolve_var(ctx, &arg.expr) {
+            args.push(FnArg::Var(idx));
+        } else if let Expr::Literal(LiteralValue::String(s)) = &arg.expr {
+            args.push(FnArg::Const(Value::String(Arc::from(s.inner()))));
+        } else if let Expr::Literal(LiteralValue::Int(i)) = &arg.expr {
+            args.push(FnArg::Const(Value::Int(*i.inner())));
+        } else {
+            return None;
+        }
     }
-    if arg_idxs.len() > 3 {
+    if args.len() > 3 {
         return None; // too many args for stack-allocated array
     }
     let cmp = match op {
@@ -908,7 +915,7 @@ fn try_compile_fn_call_int_cmp(
     };
     Some(Box::new(FilterNode::FnCall {
         func: FnCallPtr(Arc::clone(func)),
-        arg_idxs,
+        args,
         cmp,
         literal,
     }))
@@ -1260,10 +1267,18 @@ fn try_compile_in_set(ctx: &mut FilterCtx, left: &Expr, right: &Expr) -> Option<
 /// Try to extract `map["key"]` from an index expression.
 fn try_extract_map_index(ctx: &mut FilterCtx, expr: &Expr) -> Option<(usize, String)> {
     match expr {
-        Expr::Call(call) if call.func_name.as_str() == operators::INDEX && call.args.len() == 1 => {
-            let target = call.target.as_ref()?;
-            let map_idx = resolve_var(ctx, &target.expr)?;
-            let key = match &call.args[0].expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::INDEX => {
+            let (target_expr, key_expr) = if let Some(target) = &call.target {
+                // target-style: map["key"]
+                (&target.expr, &call.args.first()?.expr)
+            } else if call.args.len() == 2 {
+                // function-style: _(map, "key")
+                (&call.args[0].expr, &call.args[1].expr)
+            } else {
+                return None;
+            };
+            let map_idx = resolve_var(ctx, target_expr)?;
+            let key = match key_expr {
                 Expr::Literal(LiteralValue::String(s)) => s.inner().to_string(),
                 _ => return None,
             };
@@ -1296,12 +1311,12 @@ fn try_compile_exists(
         Var(usize),
         MapIndex { map_idx: usize, key: String },
     }
-    let iter_source = if let Some((map_idx, key)) = try_extract_map_index(ctx, &comp.iter_range.expr)
-    {
-        IterSource::MapIndex { map_idx, key }
-    } else {
-        IterSource::Var(resolve_var(ctx, &comp.iter_range.expr)?)
-    };
+    let iter_source =
+        if let Some((map_idx, key)) = try_extract_map_index(ctx, &comp.iter_range.expr) {
+            IterSource::MapIndex { map_idx, key }
+        } else {
+            IterSource::Var(resolve_var(ctx, &comp.iter_range.expr)?)
+        };
 
     // Check it's an exists pattern: accu_init = false
     let accu_false = match &comp.accu_init.expr {

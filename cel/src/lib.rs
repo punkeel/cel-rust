@@ -385,4 +385,37 @@ mod tests {
             assert_eq!(res, error.into(), "{name}");
         }
     }
+
+    #[test]
+    fn filter_tree_map_index_exists() {
+        // Test that xxx_map["abs"].exists(it, it == "def") compiles to filter tree
+        use crate::fast::{Schema, FieldType, Filter, EvalContext};
+        let mut schema = Schema::new();
+        let hdrs = schema.add_field("xxx_map", FieldType::Any);
+        let filter = Filter::compile(
+            r#"xxx_map["abs"].exists(it, it == "def")"#,
+            &schema,
+        ).expect("map-indexed exists should compile");
+        // Also check via Program (no schema)
+        let p = Program::compile(r#"xxx_map["abs"].exists(it, it == "def")"#).unwrap();
+        let has_tree = p.compile_tree().is_some();
+        assert!(has_tree, "Program path should also have filter tree");
+    }
+
+    #[test]
+    fn filter_tree_fn_call_with_literal() {
+        // Test that hamming_distance(xx, "fdsdf") > 10 compiles to filter tree
+        use crate::vm::compiler::{FnTable, RawFunction};
+        let mut ft = FnTable::new();
+        ft.insert("hamming_distance".into(), std::sync::Arc::new(|args: &[Value]| {
+            Ok(Value::Int(42))
+        }));
+        let ft = std::sync::Arc::new(ft);
+        let p = Program::compile_with_fns(
+            r#"hamming_distance(xx, "fdsdf") > 10"#,
+            ft,
+        ).expect("fn call with literal should compile");
+        let has_tree = p.compile_tree().is_some();
+        assert!(has_tree, "FnCall with string literal arg should have filter tree");
+    }
 }

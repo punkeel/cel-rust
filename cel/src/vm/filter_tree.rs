@@ -18,6 +18,13 @@ impl FnCallPtr {
     }
 }
 
+/// A function argument: either a variable index or a constant value.
+#[derive(Clone, Debug)]
+pub enum FnArg {
+    Var(usize),
+    Const(Value),
+}
+
 /// A typed integer expression that evaluates directly to `i64`.
 /// Used as a sub-expression inside boolean filters (e.g. `port + 100 >= 1024`).
 #[derive(Clone, Debug)]
@@ -430,8 +437,8 @@ pub enum FilterNode {
     FnCall {
         /// Pre-resolved function pointer.
         func: FnCallPtr,
-        /// Indices of argument variables.
-        arg_idxs: Vec<usize>,
+        /// Function arguments — each is either a variable index or a constant value.
+        args: Vec<FnArg>,
         /// Comparison operator.
         cmp: IntCmp,
         /// Literal to compare against.
@@ -726,13 +733,16 @@ impl FilterNode {
                 }
             }
             // ── Pre-resolved function call result ──
-            Self::FnCall { func, arg_idxs, cmp, literal } => {
-                let mut args = [Value::Null, Value::Null, Value::Null];
-                for (i, &idx) in arg_idxs.iter().enumerate() {
+            Self::FnCall { func, args, cmp, literal } => {
+                let mut call_args = [Value::Null, Value::Null, Value::Null];
+                for (i, arg) in args.iter().enumerate() {
                     if i >= 3 { break; }
-                    args[i] = vars[idx].clone();
+                    call_args[i] = match arg {
+                        FnArg::Var(idx) => vars[*idx].clone(),
+                        FnArg::Const(v) => v.clone(),
+                    };
                 }
-                match func.call(&args[..arg_idxs.len()]) {
+                match func.call(&call_args[..args.len()]) {
                     Ok(Value::Int(i)) => cmp.eval(i, *literal),
                     _ => false,
                 }
@@ -1136,13 +1146,16 @@ impl FilterNode {
                 }
             }
             // ── Pre-resolved function call result ──
-            Self::FnCall { func, arg_idxs, cmp, literal } => {
-                let mut args = [Value::Null, Value::Null, Value::Null];
-                for (i, &idx) in arg_idxs.iter().enumerate() {
+            Self::FnCall { func, args, cmp, literal } => {
+                let mut call_args = [Value::Null, Value::Null, Value::Null];
+                for (i, arg) in args.iter().enumerate() {
                     if i >= 3 { break; }
-                    args[i] = vars.get_unchecked(idx).clone();
+                    call_args[i] = match arg {
+                        FnArg::Var(idx) => vars.get_unchecked(*idx).clone(),
+                        FnArg::Const(v) => v.clone(),
+                    };
                 }
-                match func.call(&args[..arg_idxs.len()]) {
+                match func.call(&call_args[..args.len()]) {
                     Ok(Value::Int(i)) => cmp.eval(i, *literal),
                     _ => false,
                 }
