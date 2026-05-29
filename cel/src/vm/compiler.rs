@@ -908,6 +908,24 @@ fn compile_call(call: &crate::common::ast::CallExpr, reserved: &[&str], function
             })
         }
         Some(target) => {
+            // ── Pre-compile regex for .matches(string_literal) ──
+            #[cfg(feature = "regex")]
+            if call.func_name == "matches" && call.args.len() == 1 {
+                if let Expr::Literal(LiteralValue::String(s)) = &call.args[0].expr {
+                    let regex_str = s.inner().to_string();
+                    if let Ok(re) = regex::Regex::new(&regex_str) {
+                        let target_fn = compile_expr(reserved, &target.expr, functions);
+                        return Box::new(move |ctx| {
+                            let target_val = target_fn(ctx)?;
+                            match &target_val {
+                                Value::String(s) => Ok(Value::Bool(re.is_match(s))),
+                                _ => Err(ExecutionError::NoSuchOverload),
+                            }
+                        });
+                    }
+                }
+            }
+
             let target_fn = compile_expr(reserved, &target.expr, functions);
 
             match &target.expr {

@@ -1071,6 +1071,10 @@ fn try_compile_str_bool(
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
+        "matches" => {
+            let regex = regex::Regex::new(&val).ok()?;
+            Some(Box::new(FilterNode::Matches { idx, regex }))
+        }
         _ => None,
     }
 }
@@ -1081,7 +1085,7 @@ fn try_compile_target_str_bool(
     call: &crate::common::ast::CallExpr,
 ) -> Option<Box<FilterNode>> {
     let func = call.func_name.as_str();
-    if !matches!(func, "startsWith" | "endsWith" | "contains") {
+    if !matches!(func, "startsWith" | "endsWith" | "contains" | "matches") {
         return None;
     }
     let target_expr = call.target.as_ref()?;
@@ -1095,6 +1099,10 @@ fn try_compile_target_str_bool(
         "startsWith" => Some(Box::new(FilterNode::StartsWith { idx, prefix: val })),
         "endsWith" => Some(Box::new(FilterNode::EndsWith { idx, suffix: val })),
         "contains" => Some(Box::new(FilterNode::Contains { idx, substring: val })),
+        "matches" => {
+            let regex = regex::Regex::new(&val).ok()?;
+            Some(Box::new(FilterNode::Matches { idx, regex }))
+        }
         _ => None,
     }
 }
