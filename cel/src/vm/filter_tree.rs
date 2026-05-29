@@ -384,6 +384,28 @@ pub enum FilterNode {
         cmp: IntCmp,
     },
 
+    // --- Map-indexed exists ---
+    /// `map["key"].exists(it, it == "str")` — index map by key, iterate result, string equality.
+    MapIndexStrEq {
+        /// Index of the map variable.
+        map_idx: usize,
+        /// The key to look up (e.g. "via").
+        key: String,
+        /// String value to compare each element against.
+        cmp_val: String,
+    },
+    /// `map["key"].exists(it, it > val)` — index map by key, iterate result, int comparison.
+    MapIndexIntList {
+        /// Index of the map variable.
+        map_idx: usize,
+        /// The key to look up (e.g. "port").
+        key: String,
+        /// Each element is compared against this value.
+        cmp_val: i64,
+        /// Comparison operator.
+        cmp: IntCmp,
+    },
+
     // --- Logic combinators ---
     And(Box<FilterNode>, Box<FilterNode>),
     Or(Box<FilterNode>, Box<FilterNode>),
@@ -637,6 +659,40 @@ impl FilterNode {
                 }),
                 _ => false,
             },
+
+            // ── Map-indexed exists ──
+            Self::MapIndexStrEq { map_idx, key, cmp_val } => {
+                match &vars[*map_idx] {
+                    Value::Map(map) => {
+                        let key_ref: crate::objects::Key = key.as_str().into();
+                        match map.map.get(&key_ref) {
+                            Some(Value::String(s)) => s.as_ref() == cmp_val.as_str(),
+                            Some(Value::List(list)) => list.iter().any(|item| match item {
+                                Value::String(s) => s.as_ref() == cmp_val.as_str(),
+                                _ => false,
+                            }),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            Self::MapIndexIntList { map_idx, key, cmp_val, cmp } => {
+                match &vars[*map_idx] {
+                    Value::Map(map) => {
+                        let key_ref: crate::objects::Key = key.as_str().into();
+                        match map.map.get(&key_ref) {
+                            Some(Value::Int(i)) => cmp.eval(*i, *cmp_val),
+                            Some(Value::List(list)) => list.iter().any(|item| match item {
+                                Value::Int(i) => cmp.eval(*i, *cmp_val),
+                                _ => false,
+                            }),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -1001,6 +1057,40 @@ impl FilterNode {
                 }),
                 _ => std::hint::unreachable_unchecked(),
             },
+
+            // ── Map-indexed exists (eval_fast) ──
+            Self::MapIndexStrEq { map_idx, key, cmp_val } => {
+                match vars.get_unchecked(*map_idx) {
+                    Value::Map(map) => {
+                        let key_ref: crate::objects::Key = key.as_str().into();
+                        match map.map.get(&key_ref) {
+                            Some(Value::String(s)) => s.as_ref() == cmp_val.as_str(),
+                            Some(Value::List(list)) => list.iter().any(|item| match item {
+                                Value::String(s) => s.as_ref() == cmp_val.as_str(),
+                                _ => false,
+                            }),
+                            _ => std::hint::unreachable_unchecked(),
+                        }
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::MapIndexIntList { map_idx, key, cmp_val, cmp } => {
+                match vars.get_unchecked(*map_idx) {
+                    Value::Map(map) => {
+                        let key_ref: crate::objects::Key = key.as_str().into();
+                        match map.map.get(&key_ref) {
+                            Some(Value::Int(i)) => cmp.eval(*i, *cmp_val),
+                            Some(Value::List(list)) => list.iter().any(|item| match item {
+                                Value::Int(i) => cmp.eval(*i, *cmp_val),
+                                _ => false,
+                            }),
+                            _ => std::hint::unreachable_unchecked(),
+                        }
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
         }
     }
 
@@ -1160,7 +1250,8 @@ impl FilterNode {
 
             // ── Exists / comprehension (requires Value array — not callable from typed path) ──
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
-            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. } => {
+            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
+            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => {
                 std::hint::unreachable_unchecked()
             }
         }
@@ -1209,7 +1300,8 @@ impl FilterNode {
 
             // Exists / comprehension — O(N) iteration
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
-            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. } => 100,
+            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
+            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => 100,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),

@@ -523,7 +523,8 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
         // ── Exists / comprehension (fallback — compile to true at compile time,
         //     actual iteration happens via FilterNode::eval())
         FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. }
-        | FilterNode::ExistsIntSet { .. } | FilterNode::ExistsMapInt { .. } => Box::new(|_, _| false),
+        | FilterNode::ExistsIntSet { .. } | FilterNode::ExistsMapInt { .. }
+        | FilterNode::MapIndexStrEq { .. } | FilterNode::MapIndexIntList { .. } => Box::new(|_, _| false),
     })
 }
 
@@ -1190,8 +1191,26 @@ fn try_compile_in_set(ctx: &mut FilterCtx, left: &Expr, right: &Expr) -> Option<
     None
 }
 
+/// Try to extract `map["key"]` from an index expression.
+fn try_extract_map_index(ctx: &mut FilterCtx, expr: &Expr) -> Option<(usize, String)> {
+    match expr {
+        Expr::Call(call) if call.func_name.as_str() == operators::INDEX && call.args.len() == 1 => {
+            let target = call.target.as_ref()?;
+            let map_idx = resolve_var(ctx, &target.expr)?;
+            let key = match &call.args[0].expr {
+                Expr::Literal(LiteralValue::String(s)) => s.inner().to_string(),
+                _ => return None,
+            };
+            Some((map_idx, key))
+        }
+        _ => None,
+    }
+}
+
 /// Try to compile an `exists` comprehension pattern:
 /// `list.exists(x, x op literal)` — iter int/string list, check condition.
+///
+/// Also handles `map["key"].exists(it, it op literal)` — map-indexed exists.
 ///
 /// Detects the exists macro expansion:\
 ///   accu_init = false\
@@ -1205,8 +1224,18 @@ fn try_compile_exists(
     use crate::common::ast::LiteralValue;
     use crate::parser::Expression;
 
-    // Check iter_range is a simple variable
-    let collection_idx = resolve_var(ctx, &comp.iter_range.expr)?;
+    // Determine the iteration source: either a simple variable (list/map),
+    // or a map-indexed value (map["key"]).
+    enum IterSource {
+        Var(usize),
+        MapIndex { map_idx: usize, key: String },
+    }
+    let iter_source = if let Some((map_idx, key)) = try_extract_map_index(ctx, &comp.iter_range.expr)
+    {
+        IterSource::MapIndex { map_idx, key }
+    } else {
+        IterSource::Var(resolve_var(ctx, &comp.iter_range.expr)?)
+    };
 
     // Check it's an exists pattern: accu_init = false
     let accu_false = match &comp.accu_init.expr {
@@ -1273,7 +1302,6 @@ fn try_compile_exists(
     if cond_name == operators::IN {
         match &cond_call.args[1].expr {
             Expr::List(list) => {
-                // All ints?
                 let mut ints = Vec::with_capacity(list.elements.len());
                 for item in &list.elements {
                     if let Expr::Literal(LiteralValue::Int(i)) = &item.expr {
@@ -1281,6 +1309,10 @@ fn try_compile_exists(
                     } else { ints.clear(); break; }
                 }
                 if ints.len() == list.elements.len() {
+                    let collection_idx = match &iter_source {
+                        IterSource::Var(idx) => *idx,
+                        IterSource::MapIndex { .. } => return None, // not supported yet
+                    };
                     return Some(Box::new(FilterNode::ExistsIntSet {
                         collection_idx, vals: ints,
                     }));
@@ -1298,10 +1330,21 @@ fn try_compile_exists(
         (Expr::Ident(_), Expr::Literal(LiteralValue::Int(v))) => {
             let val = *v.inner();
             let make_node = |cmp: crate::vm::filter_tree::IntCmp| -> Box<FilterNode> {
-                if is_map {
-                    Box::new(FilterNode::ExistsMapInt { collection_idx, cmp_val: val, cmp })
-                } else {
-                    Box::new(FilterNode::ExistsIntList { collection_idx, cmp_val: val, cmp })
+                match &iter_source {
+                    IterSource::Var(idx) if is_map => {
+                        Box::new(FilterNode::ExistsMapInt { collection_idx: *idx, cmp_val: val, cmp })
+                    }
+                    IterSource::Var(idx) => {
+                        Box::new(FilterNode::ExistsIntList { collection_idx: *idx, cmp_val: val, cmp })
+                    }
+                    IterSource::MapIndex { map_idx, key } => {
+                        Box::new(FilterNode::MapIndexIntList {
+                            map_idx: *map_idx,
+                            key: key.clone(),
+                            cmp_val: val,
+                            cmp,
+                        })
+                    }
                 }
             };
             match cond_name {
@@ -1314,15 +1357,27 @@ fn try_compile_exists(
                 _ => None,
             }
         }
-        // String exists: list.exists(x, x == "val")
+        // String exists: list.exists(x, x == "val") or map["key"].exists(it, it == "val")
         (Expr::Ident(_), Expr::Literal(LiteralValue::String(s))) => {
             if cond_name == operators::EQUALS {
-                Some(Box::new(FilterNode::ExistsStrEq {
-                    collection_idx,
-                    cmp_val: s.inner().to_string(),
-                }))
+                let cmp_val = s.inner().to_string();
+                match &iter_source {
+                    IterSource::Var(idx) => {
+                        Some(Box::new(FilterNode::ExistsStrEq {
+                            collection_idx: *idx,
+                            cmp_val,
+                        }))
+                    }
+                    IterSource::MapIndex { map_idx, key } => {
+                        Some(Box::new(FilterNode::MapIndexStrEq {
+                            map_idx: *map_idx,
+                            key: key.clone(),
+                            cmp_val,
+                        }))
+                    }
+                }
             } else {
-                None // Only Eq is supported for string exists
+                None
             }
         }
         _ => None,
