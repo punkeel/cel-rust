@@ -2,7 +2,7 @@ use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
 use crate::common::types::CelBool;
 use crate::objects::Value;
-use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
+use crate::vm::filter_tree::{FilterNode, FnCallPtr, I64Expr, ListExpr, StrExpr};
 use crate::{ExecutionError, Expression};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -527,7 +527,8 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
         //     actual iteration happens via FilterNode::eval())
         FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. }
         | FilterNode::ExistsIntSet { .. } | FilterNode::ExistsMapInt { .. }
-        | FilterNode::MapIndexStrEq { .. } | FilterNode::MapIndexIntList { .. } => Box::new(|_, _| false),
+        | FilterNode::MapIndexStrEq { .. } | FilterNode::MapIndexIntList { .. }
+        | FilterNode::FnCmpResult { .. } => Box::new(|_, _| false),
     })
 }
 
@@ -539,18 +540,22 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
 pub fn compile_filter_tree_with_schema(
     expr: &Expression,
     field_names: &[&str],
+    functions: Option<&crate::vm::compiler::FnTable>,
 ) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::with_schema(field_names);
-    let mut filter = compile_expr(&mut ctx, &expr.expr)?;
+    let mut filter = compile_expr(&mut ctx, &expr.expr, functions)?;
     filter.optimize_order();
     let needs_values = filter.needs_values();
     let compiled = compile_closure(&filter);
     Ok(CompiledFilterTree { filter, compiled, var_names: ctx.var_names, needs_values })
 }
 
-pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, String> {
+pub fn compile_filter_tree(
+    expr: &Expression,
+    functions: Option<&crate::vm::compiler::FnTable>,
+) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::new();
-    let mut filter = compile_expr(&mut ctx, &expr.expr)?;
+    let mut filter = compile_expr(&mut ctx, &expr.expr, functions)?;
     filter.optimize_order();
     let needs_values = filter.needs_values();
     let compiled = compile_closure(&filter);
@@ -645,7 +650,7 @@ fn resolve_var(ctx: &mut FilterCtx, expr: &Expr) -> Option<usize> {
     }
 }
 
-fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, String> {
+fn compile_expr(ctx: &mut FilterCtx, expr: &Expr, functions: Option<&crate::vm::compiler::FnTable>) -> Result<Box<FilterNode>, String> {
     match expr {
         // ── Boolean literal: `true`, `false` ──
         Expr::Literal(LiteralValue::Boolean(b)) => {
@@ -679,17 +684,17 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
             }
 
             if name == operators::LOGICAL_AND && call.args.len() == 2 {
-                let a = compile_expr(ctx, &call.args[0].expr)?;
-                let b = compile_expr(ctx, &call.args[1].expr)?;
+                let a = compile_expr(ctx, &call.args[0].expr, functions)?;
+                let b = compile_expr(ctx, &call.args[1].expr, functions)?;
                 return Ok(Box::new(FilterNode::And(a, b)));
             }
             if name == operators::LOGICAL_OR && call.args.len() == 2 {
-                let a = compile_expr(ctx, &call.args[0].expr)?;
-                let b = compile_expr(ctx, &call.args[1].expr)?;
+                let a = compile_expr(ctx, &call.args[0].expr, functions)?;
+                let b = compile_expr(ctx, &call.args[1].expr, functions)?;
                 return Ok(Box::new(FilterNode::Or(a, b)));
             }
             if name == operators::LOGICAL_NOT && call.args.len() == 1 {
-                let inner = compile_expr(ctx, &call.args[0].expr)?;
+                let inner = compile_expr(ctx, &call.args[0].expr, functions)?;
                 return Ok(Box::new(FilterNode::Not(inner)));
             }
 
@@ -709,7 +714,7 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
 
             if call.args.len() == 2 {
                 if let Some(f) =
-                    try_compile_int_cmp(ctx, name, &call.args[0].expr, &call.args[1].expr)
+                    try_compile_int_cmp(ctx, name, &call.args[0].expr, &call.args[1].expr, functions)
                 {
                     return Ok(f);
                 }
@@ -862,11 +867,59 @@ fn extract_contains(expr: &Expr) -> Option<(String, String)> {
     Some((var_name, literal))
 }
 
+fn try_compile_fn_call_int_cmp(
+    ctx: &mut FilterCtx,
+    op: &str,
+    left: &Expr,
+    right: &Expr,
+    functions: Option<&crate::vm::compiler::FnTable>,
+) -> Option<Box<FilterNode>> {
+    use crate::common::ast::LiteralValue;
+    let functions = functions?;
+    // Check that right is an int literal
+    let literal = match right {
+        Expr::Literal(LiteralValue::Int(i)) => *i.inner(),
+        _ => return None,
+    };
+    // Check that left is a function call
+    let call = match left {
+        Expr::Call(c) if c.args.len() >= 1 => c,
+        _ => return None,
+    };
+    // Look up the function in FnTable
+    let func = functions.get(&call.func_name)?;
+    // Check that all arguments are simple variables
+    let mut arg_idxs = Vec::with_capacity(call.args.len());
+    for arg in &call.args {
+        let idx = resolve_var(ctx, &arg.expr)?;
+        arg_idxs.push(idx);
+    }
+    if arg_idxs.len() > 3 {
+        return None; // too many args for stack-allocated array
+    }
+    let cmp = match op {
+        operators::EQUALS => crate::vm::filter_tree::IntCmp::Eq,
+        operators::NOT_EQUALS => crate::vm::filter_tree::IntCmp::Ne,
+        operators::LESS => crate::vm::filter_tree::IntCmp::Lt,
+        operators::LESS_EQUALS => crate::vm::filter_tree::IntCmp::Le,
+        operators::GREATER => crate::vm::filter_tree::IntCmp::Gt,
+        operators::GREATER_EQUALS => crate::vm::filter_tree::IntCmp::Ge,
+        _ => return None,
+    };
+    Some(Box::new(FilterNode::FnCmpResult {
+        func: FnCallPtr(Arc::clone(func)),
+        arg_idxs,
+        cmp,
+        literal,
+    }))
+}
+
 fn try_compile_int_cmp(
     ctx: &mut FilterCtx,
     op: &str,
     left: &Expr,
     right: &Expr,
+    functions: Option<&crate::vm::compiler::FnTable>,
 ) -> Option<Box<FilterNode>> {
     // Fast path: var op literal  (e.g. port == 80)
     fn try_var_lit(ctx: &mut FilterCtx, var_expr: &Expr, lit_expr: &Expr) -> Option<(usize, i64)> {
@@ -984,6 +1037,14 @@ fn try_compile_int_cmp(
         return Some(f);
     }
     if let Some(f) = try_arith_lit(ctx, right, op, left) {
+        return Some(f);
+    }
+
+    // Pre-resolved function call: func_name(args) op literal
+    if let Some(f) = try_compile_fn_call_int_cmp(ctx, op, left, right, functions) {
+        return Some(f);
+    }
+    if let Some(f) = try_compile_fn_call_int_cmp(ctx, op, right, left, functions) {
         return Some(f);
     }
 

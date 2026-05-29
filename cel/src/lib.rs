@@ -177,7 +177,7 @@ impl Program {
     pub fn compile(source: &str) -> Result<Program, ParseErrors> {
         let parser = Parser::default();
         let expression = parser.parse(source)?;
-        let tree = vm::compile_filter_tree(&expression).ok();
+        let tree = vm::compile_filter_tree(&expression, None).ok();
         let general = vm::compiler::compile_expression(&expression, &[], None);
         Ok(Program { expression, tree, general })
     }
@@ -190,7 +190,7 @@ impl Program {
         let mut expression = parser.parse(source)?;
         let resolver = crate::function_handle::FunctionResolver::new(env);
         crate::function_handle::resolve_ast(&mut expression, &resolver);
-        let tree = vm::compile_filter_tree(&expression).ok();
+        let tree = vm::compile_filter_tree(&expression, None).ok();
         let general = vm::compiler::compile_expression(&expression, &[], None);
         Ok(Program { expression, tree, general })
     }
@@ -210,7 +210,7 @@ impl Program {
     ) -> Result<Program, ParseErrors> {
         let parser = Parser::default();
         let expression = parser.parse(source)?;
-        let tree = vm::compile_filter_tree(&expression).ok();
+        let tree = vm::compile_filter_tree(&expression, Some(&function_table)).ok();
         let general = vm::compiler::compile_expression(&expression, &[], Some(&function_table));
         Ok(Program {
             expression,

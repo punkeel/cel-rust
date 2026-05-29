@@ -393,6 +393,7 @@ impl Filter {
         let tree = filter_tree_compiler::compile_filter_tree_with_schema(
             &expression,
             &field_names,
+            None,
         )?;
         Ok(Filter { tree })
     }

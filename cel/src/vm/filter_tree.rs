@@ -1,5 +1,23 @@
 use crate::objects::Value;
 
+/// A pre-resolved function from the FnTable.
+/// Wraps the raw function pointer with Debug+Clone so it can be stored in FilterNode.
+#[derive(Clone)]
+pub struct FnCallPtr(pub std::sync::Arc<dyn Fn(&[Value]) -> Result<Value, crate::ExecutionError> + Send + Sync>);
+
+impl std::fmt::Debug for FnCallPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FnCallPtr").finish()
+    }
+}
+
+impl FnCallPtr {
+    /// Call the function with the given argument slice.
+    pub fn call(&self, args: &[Value]) -> Result<Value, crate::ExecutionError> {
+        (self.0)(args)
+    }
+}
+
 /// A typed integer expression that evaluates directly to `i64`.
 /// Used as a sub-expression inside boolean filters (e.g. `port + 100 >= 1024`).
 #[derive(Clone, Debug)]
@@ -406,6 +424,20 @@ pub enum FilterNode {
         cmp: IntCmp,
     },
 
+    // --- Pre-resolved function call result ---
+    /// `func_name(arg_idxs...) cmp_op literal` — pre-resolved function from FnTable,
+    /// called at eval time, result compared against a literal.
+    FnCmpResult {
+        /// Pre-resolved function pointer.
+        func: FnCallPtr,
+        /// Indices of argument variables.
+        arg_idxs: Vec<usize>,
+        /// Comparison operator.
+        cmp: IntCmp,
+        /// Literal to compare against.
+        literal: i64,
+    },
+
     // --- Logic combinators ---
     And(Box<FilterNode>, Box<FilterNode>),
     Or(Box<FilterNode>, Box<FilterNode>),
@@ -690,6 +722,18 @@ impl FilterNode {
                             _ => false,
                         }
                     }
+                    _ => false,
+                }
+            }
+            // ── Pre-resolved function call result ──
+            Self::FnCmpResult { func, arg_idxs, cmp, literal } => {
+                let mut args = [Value::Null, Value::Null, Value::Null];
+                for (i, &idx) in arg_idxs.iter().enumerate() {
+                    if i >= 3 { break; }
+                    args[i] = vars[idx].clone();
+                }
+                match func.call(&args[..arg_idxs.len()]) {
+                    Ok(Value::Int(i)) => cmp.eval(i, *literal),
                     _ => false,
                 }
             }
@@ -1091,6 +1135,18 @@ impl FilterNode {
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
+            // ── Pre-resolved function call result ──
+            Self::FnCmpResult { func, arg_idxs, cmp, literal } => {
+                let mut args = [Value::Null, Value::Null, Value::Null];
+                for (i, &idx) in arg_idxs.iter().enumerate() {
+                    if i >= 3 { break; }
+                    args[i] = vars.get_unchecked(idx).clone();
+                }
+                match func.call(&args[..arg_idxs.len()]) {
+                    Ok(Value::Int(i)) => cmp.eval(i, *literal),
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -1251,7 +1307,8 @@ impl FilterNode {
             // ── Exists / comprehension (requires Value array — not callable from typed path) ──
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
-            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => {
+            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. }
+            | Self::FnCmpResult { .. } => {
                 std::hint::unreachable_unchecked()
             }
         }
@@ -1302,6 +1359,7 @@ impl FilterNode {
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
             | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => 100,
+            | Self::FnCmpResult { .. } => 80,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),
@@ -1315,7 +1373,8 @@ impl FilterNode {
         match self {
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
-            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => true,
+            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. }
+            | Self::FnCmpResult { .. } => true,
             Self::And(a, b) | Self::Or(a, b) => a.needs_values() || b.needs_values(),
             Self::Not(inner) => inner.needs_values(),
             _ => false,
