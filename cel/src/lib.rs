@@ -221,29 +221,33 @@ impl Program {
 
     /// Evaluate the expression using the fastest available compiled path.
     /// ~1–6 ns for filter-like boolean expressions via filter tree.
-    /// Falls back to the AST interpreter for non-filter expressions
+    /// Falls back to the general compiled closure for non-filter expressions
     /// or when variables referenced by the filter tree aren't declared.
     pub fn execute(&self, context: &Context) -> ResolveResult {
         if let Some(ref tree) = self.tree {
             // Verify all referenced variables exist — filter tree silently
             // defaults undeclared vars to null, but we must return errors
+            let mut all_declared = true;
             for name in &tree.var_names {
                 if context.get_variable(name).is_none() {
-                    return (self.general)(context);
+                    all_declared = false;
+                    break;
                 }
             }
-            let (ints, strings) = tree.bind_typed(context);
-            tree.compiled.eval_value(&ints, &strings)
-        } else {
-            (self.general)(context)
+            if all_declared {
+                let (ints, strings) = tree.bind_typed(context);
+                return tree.compiled.eval_value(&ints, &strings);
+            }
         }
+        (self.general)(context)
     }
 
     /// Alias for [`execute`] — same path.
+    /// ~1–6 ns for filter-like boolean expressions via filter tree.
+    /// Falls back to the general compiled closure.
     pub fn execute_fast(&self, context: &Context) -> ResolveResult {
         self.execute(context)
     }
-
     /// Returns the compiled filter tree, if the expression compiles.
     pub fn compile_tree(&self) -> Option<&vm::filter_tree_compiler::CompiledFilterTree> {
         self.tree.as_ref()
