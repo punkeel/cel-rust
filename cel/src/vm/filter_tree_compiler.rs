@@ -1,5 +1,6 @@
 use crate::common::ast::operators;
 use crate::common::ast::{Expr, LiteralValue};
+use crate::common::types::CelBool;
 use crate::objects::Value;
 use crate::vm::filter_tree::{FilterNode, I64Expr, ListExpr, StrExpr};
 use crate::{ExecutionError, Expression};
@@ -144,6 +145,11 @@ impl CompiledFilterTree {
                             let s = v.downcast_ref::<CelString>().unwrap().inner();
                             ints.push(0);
                             strings.push(std::sync::Arc::from(s));
+                        }
+                        crate::common::types::Kind::Boolean => {
+                            let b = *v.downcast_ref::<CelBool>().unwrap().inner();
+                            ints.push(if b { 1 } else { 0 });
+                            strings.push(std::sync::Arc::from(""));
                         }
                         _ => {
                             ints.push(0);
@@ -503,6 +509,16 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
             let b = compile_closure_i64(right);
             Box::new(move |ints, strings| a(ints, strings) != b(ints, strings))
         }
+
+        // ── Boolean variable / literal ──
+        FilterNode::BoolLiteral { val } => {
+            let v = *val;
+            Box::new(move |_, _| v)
+        }
+        FilterNode::BoolVar { idx } => {
+            let i = *idx;
+            Box::new(move |ints, _| ints[i] != 0)
+        }
     })
 }
 
@@ -620,6 +636,10 @@ fn resolve_var(ctx: &mut FilterCtx, expr: &Expr) -> Option<usize> {
 
 fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, String> {
     match expr {
+        // ── Boolean literal: `true`, `false` ──
+        Expr::Literal(LiteralValue::Boolean(b)) => {
+            Ok(Box::new(FilterNode::BoolLiteral { val: *b.inner() }))
+        }
         Expr::Call(call) => {
             let name = call.func_name.as_str();
 

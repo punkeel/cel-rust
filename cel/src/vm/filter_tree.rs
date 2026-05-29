@@ -318,6 +318,12 @@ pub enum FilterNode {
     EqExpr { left: I64Expr, right: I64Expr },
     NeExpr { left: I64Expr, right: I64Expr },
 
+    // --- Boolean variable / literal ---
+    /// Read a variable as a boolean value (`is_admin`, `flag_enabled`).
+    BoolVar { idx: usize },
+    /// A boolean literal — `true` or `false`.
+    BoolLiteral { val: bool },
+
     // --- Logic combinators ---
     And(Box<FilterNode>, Box<FilterNode>),
     Or(Box<FilterNode>, Box<FilterNode>),
@@ -526,6 +532,13 @@ impl FilterNode {
             Self::And(a, b) => a.eval(vars) && b.eval(vars),
             Self::Or(a, b) => a.eval(vars) || b.eval(vars),
             Self::Not(inner) => !inner.eval(vars),
+
+            // ── Boolean variable / literal ──
+            Self::BoolLiteral { val } => *val,
+            Self::BoolVar { idx } => match &vars[*idx] {
+                Value::Bool(b) => *b,
+                _ => false,
+            },
         }
     }
 
@@ -845,6 +858,13 @@ impl FilterNode {
             Self::And(a, b) => a.eval_fast(vars) && b.eval_fast(vars),
             Self::Or(a, b) => a.eval_fast(vars) || b.eval_fast(vars),
             Self::Not(inner) => !inner.eval_fast(vars),
+
+            // ── Boolean variable / literal ──
+            Self::BoolLiteral { val } => *val,
+            Self::BoolVar { idx } => match vars.get_unchecked(*idx) {
+                Value::Bool(b) => *b,
+                _ => std::hint::unreachable_unchecked(),
+            },
         }
     }
 
@@ -997,6 +1017,10 @@ impl FilterNode {
             Self::And(a, b) => a.eval_fast_typed(ints, strings) && b.eval_fast_typed(ints, strings),
             Self::Or(a, b) => a.eval_fast_typed(ints, strings) || b.eval_fast_typed(ints, strings),
             Self::Not(inner) => !inner.eval_fast_typed(ints, strings),
+
+            // ── Boolean variable / literal (encoded as i64 0/1 in ints array) ──
+            Self::BoolLiteral { val } => *val,
+            Self::BoolVar { idx } => *ints.get_unchecked(*idx) != 0,
         }
     }
 
@@ -1037,6 +1061,9 @@ impl FilterNode {
             Self::Matches { .. } => 50,
             Self::ContainsAny { .. } => 35,
             Self::AhoContains { .. } => 40,
+
+            // Boolean variable / literal — cheap (register read + int-to-bool)
+            Self::BoolVar { .. } | Self::BoolLiteral { .. } => 1,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),
