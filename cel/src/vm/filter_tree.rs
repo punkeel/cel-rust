@@ -367,6 +367,22 @@ pub enum FilterNode {
         /// String value to compare each element against.
         cmp_val: String,
     },
+    /// `list.exists(x, x in [1, 2, 3])` — int-list membership via exists.
+    ExistsIntSet {
+        /// Index of the collection (list of ints) variable.
+        collection_idx: usize,
+        /// Integer set to check membership against.
+        vals: Vec<i64>,
+    },
+    /// `map.exists(k, v, v > 5)` — iterate map, check int value condition.
+    ExistsMapInt {
+        /// Index of the collection (map) variable.
+        collection_idx: usize,
+        /// Each value is compared against this value.
+        cmp_val: i64,
+        /// Comparison operator for values.
+        cmp: IntCmp,
+    },
 
     // --- Logic combinators ---
     And(Box<FilterNode>, Box<FilterNode>),
@@ -607,6 +623,20 @@ impl FilterNode {
                     _ => false,
                 }
             }
+            Self::ExistsIntSet { collection_idx, vals } => match &vars[*collection_idx] {
+                Value::List(list) => list.iter().any(|item| match item {
+                    Value::Int(i) => vals.contains(i),
+                    _ => false,
+                }),
+                _ => false,
+            },
+            Self::ExistsMapInt { collection_idx, cmp_val, cmp } => match &vars[*collection_idx] {
+                Value::Map(map) => map.map.values().any(|v| match v {
+                    Value::Int(i) => cmp.eval(*i, *cmp_val),
+                    _ => false,
+                }),
+                _ => false,
+            },
         }
     }
 
@@ -957,6 +987,20 @@ impl FilterNode {
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
+            Self::ExistsIntSet { collection_idx, vals } => match vars.get_unchecked(*collection_idx) {
+                Value::List(list) => list.iter().any(|item| match item {
+                    Value::Int(i) => vals.contains(i),
+                    _ => false,
+                }),
+                _ => std::hint::unreachable_unchecked(),
+            },
+            Self::ExistsMapInt { collection_idx, cmp_val, cmp } => match vars.get_unchecked(*collection_idx) {
+                Value::Map(map) => map.map.values().any(|v| match v {
+                    Value::Int(i) => cmp.eval(*i, *cmp_val),
+                    _ => false,
+                }),
+                _ => std::hint::unreachable_unchecked(),
+            },
         }
     }
 
@@ -1115,7 +1159,8 @@ impl FilterNode {
             Self::BoolVar { idx } => *ints.get_unchecked(*idx) != 0,
 
             // ── Exists / comprehension (requires Value array — not callable from typed path) ──
-            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. } => {
+            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
+            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. } => {
                 std::hint::unreachable_unchecked()
             }
         }
@@ -1163,7 +1208,8 @@ impl FilterNode {
             Self::BoolVar { .. } | Self::BoolLiteral { .. } => 1,
 
             // Exists / comprehension — O(N) iteration
-            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. } => 100,
+            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
+            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. } => 100,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),

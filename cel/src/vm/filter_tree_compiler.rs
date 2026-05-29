@@ -522,9 +522,8 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
 
         // ── Exists / comprehension (fallback — compile to true at compile time,
         //     actual iteration happens via FilterNode::eval())
-        FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. } => {
-            Box::new(|_, _| false)
-        }
+        FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. }
+        | FilterNode::ExistsIntSet { .. } | FilterNode::ExistsMapInt { .. } => Box::new(|_, _| false),
     })
 }
 
@@ -1252,39 +1251,66 @@ fn try_compile_exists(
     let is_iter = |e: &Expr| -> bool {
         matches!(e, Expr::Ident(n) if n == &comp.iter_var)
     };
+    // For map exists, the value variable is iter_var2
+    let is_val = |e: &Expr| -> bool {
+        comp.iter_var2.as_ref().map_or(false, |v| matches!(e, Expr::Ident(n) if n == v))
+    };
     let iter_arg = if is_iter(&cond_call.args[0].expr) {
         0
     } else if is_iter(&cond_call.args[1].expr) {
+        1
+    } else if is_val(&cond_call.args[0].expr) && comp.iter_var2.is_some() {
+        // Map exists: condition references the value variable (iter_var2)
+        0
+    } else if is_val(&cond_call.args[1].expr) && comp.iter_var2.is_some() {
         1
     } else {
         return None;
     };
     let lit_arg = 1 - iter_arg;
 
+    // -- Check for `in` set pattern: x in [1, 2, 3] --
+    if cond_name == operators::IN {
+        match &cond_call.args[1].expr {
+            Expr::List(list) => {
+                // All ints?
+                let mut ints = Vec::with_capacity(list.elements.len());
+                for item in &list.elements {
+                    if let Expr::Literal(LiteralValue::Int(i)) = &item.expr {
+                        ints.push(*i.inner());
+                    } else { ints.clear(); break; }
+                }
+                if ints.len() == list.elements.len() {
+                    return Some(Box::new(FilterNode::ExistsIntSet {
+                        collection_idx, vals: ints,
+                    }));
+                }
+            }
+            _ => {}
+        }
+        return None;
+    }
+
     // Parse the literal
+    let is_map = comp.iter_var2.is_some();
     match (&cond_call.args[iter_arg].expr, &cond_call.args[lit_arg].expr) {
-        // Int exists: list.exists(x, x > 5)
+        // Int exists: list.exists(x, x > 5) or map.exists(k, v, v > 5)
         (Expr::Ident(_), Expr::Literal(LiteralValue::Int(v))) => {
             let val = *v.inner();
+            let make_node = |cmp: crate::vm::filter_tree::IntCmp| -> Box<FilterNode> {
+                if is_map {
+                    Box::new(FilterNode::ExistsMapInt { collection_idx, cmp_val: val, cmp })
+                } else {
+                    Box::new(FilterNode::ExistsIntList { collection_idx, cmp_val: val, cmp })
+                }
+            };
             match cond_name {
-                operators::EQUALS => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Eq,
-                })),
-                operators::NOT_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Ne,
-                })),
-                operators::LESS => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Lt,
-                })),
-                operators::LESS_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Le,
-                })),
-                operators::GREATER => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Gt,
-                })),
-                operators::GREATER_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
-                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Ge,
-                })),
+                operators::EQUALS => Some(make_node(crate::vm::filter_tree::IntCmp::Eq)),
+                operators::NOT_EQUALS => Some(make_node(crate::vm::filter_tree::IntCmp::Ne)),
+                operators::LESS => Some(make_node(crate::vm::filter_tree::IntCmp::Lt)),
+                operators::LESS_EQUALS => Some(make_node(crate::vm::filter_tree::IntCmp::Le)),
+                operators::GREATER => Some(make_node(crate::vm::filter_tree::IntCmp::Gt)),
+                operators::GREATER_EQUALS => Some(make_node(crate::vm::filter_tree::IntCmp::Ge)),
                 _ => None,
             }
         }
