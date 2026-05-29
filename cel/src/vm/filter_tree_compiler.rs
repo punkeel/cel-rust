@@ -519,6 +519,12 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
             let i = *idx;
             Box::new(move |ints, _| ints[i] != 0)
         }
+
+        // ── Exists / comprehension (fallback — compile to true at compile time,
+        //     actual iteration happens via FilterNode::eval())
+        FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. } => {
+            Box::new(|_, _| false)
+        }
     })
 }
 
@@ -644,6 +650,13 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
         Expr::Ident(name) => {
             let idx = ctx.var_idx(name);
             Ok(Box::new(FilterNode::BoolVar { idx }))
+        }
+        // ── Comprehension / exists: `list.exists(x, x > 5)` ──
+        Expr::Comprehension(comp) => {
+            if let Some(f) = try_compile_exists(ctx, comp) {
+                return Ok(f);
+            }
+            Err("unsupported comprehension in filter tree".into())
         }
         Expr::Call(call) => {
             let name = call.func_name.as_str();
@@ -1176,4 +1189,116 @@ fn try_compile_in_set(ctx: &mut FilterCtx, left: &Expr, right: &Expr) -> Option<
     }
 
     None
+}
+
+/// Try to compile an `exists` comprehension pattern:
+/// `list.exists(x, x op literal)` — iter int/string list, check condition.
+///
+/// Detects the exists macro expansion:\
+///   accu_init = false\
+///   loop_cond = !accu_var\
+///   loop_step = accu_var || condition\
+///   result = accu_var
+fn try_compile_exists(
+    ctx: &mut FilterCtx,
+    comp: &crate::common::ast::ComprehensionExpr,
+) -> Option<Box<FilterNode>> {
+    use crate::common::ast::LiteralValue;
+    use crate::parser::Expression;
+
+    // Check iter_range is a simple variable
+    let collection_idx = resolve_var(ctx, &comp.iter_range.expr)?;
+
+    // Check it's an exists pattern: accu_init = false
+    let accu_false = match &comp.accu_init.expr {
+        Expr::Literal(LiteralValue::Boolean(b)) => !*b.inner(),
+        _ => return None,
+    };
+    if !accu_false {
+        return None;
+    }
+
+    // loop_step should be: accu_var || (...condition...)
+    // Extract the condition from the OR
+    let loop_step_call = match &comp.loop_step.expr {
+        Expr::Call(c) if c.func_name.as_str() == operators::LOGICAL_OR
+            && c.args.len() == 2 => c,
+        _ => return None,
+    };
+    // One side should reference the accumulator, the other is the condition
+    let cond_expr = {
+        let left_is_accu = matches!(&loop_step_call.args[0].expr,
+            Expr::Ident(n) if n == &comp.accu_var);
+        let right_is_accu = matches!(&loop_step_call.args[1].expr,
+            Expr::Ident(n) if n == &comp.accu_var);
+        if left_is_accu {
+            &loop_step_call.args[1].expr
+        } else if right_is_accu {
+            &loop_step_call.args[0].expr
+        } else {
+            return None;
+        }
+    };
+
+    // Now cond_expr should be a comparison: x op literal
+    // where x is the iteration variable
+    let cond_call = match cond_expr {
+        Expr::Call(c) if c.args.len() == 2 => c,
+        _ => return None,
+    };
+    let cond_name = cond_call.func_name.as_str();
+
+    // Determine which arg is the iteration variable and which is the literal
+    let is_iter = |e: &Expr| -> bool {
+        matches!(e, Expr::Ident(n) if n == &comp.iter_var)
+    };
+    let iter_arg = if is_iter(&cond_call.args[0].expr) {
+        0
+    } else if is_iter(&cond_call.args[1].expr) {
+        1
+    } else {
+        return None;
+    };
+    let lit_arg = 1 - iter_arg;
+
+    // Parse the literal
+    match (&cond_call.args[iter_arg].expr, &cond_call.args[lit_arg].expr) {
+        // Int exists: list.exists(x, x > 5)
+        (Expr::Ident(_), Expr::Literal(LiteralValue::Int(v))) => {
+            let val = *v.inner();
+            match cond_name {
+                operators::EQUALS => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Eq,
+                })),
+                operators::NOT_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Ne,
+                })),
+                operators::LESS => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Lt,
+                })),
+                operators::LESS_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Le,
+                })),
+                operators::GREATER => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Gt,
+                })),
+                operators::GREATER_EQUALS => Some(Box::new(FilterNode::ExistsIntList {
+                    collection_idx, cmp_val: val, cmp: crate::vm::filter_tree::IntCmp::Ge,
+                })),
+                _ => None,
+            }
+        }
+        // String exists: list.exists(x, x == "val")
+        (Expr::Ident(_), Expr::Literal(LiteralValue::String(s))) => {
+            if cond_name == operators::EQUALS {
+                Some(Box::new(FilterNode::ExistsStrEq {
+                    collection_idx,
+                    cmp_val: s.inner().to_string(),
+                }))
+            } else {
+                None // Only Eq is supported for string exists
+            }
+        }
+        _ => None,
+    }
 }

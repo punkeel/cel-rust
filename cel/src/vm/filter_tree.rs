@@ -250,6 +250,32 @@ impl ListExpr {
 /// No vtable dispatch, no generic monomorphization across combinators.
 /// The `eval` function is a single `match` — the compiler sees every
 /// branch at once and can optimize across them.
+
+/// Integer comparison operator for `exists` and similar nodes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IntCmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl IntCmp {
+    #[inline(always)]
+    pub fn eval(&self, a: i64, b: i64) -> bool {
+        match self {
+            IntCmp::Eq => a == b,
+            IntCmp::Ne => a != b,
+            IntCmp::Lt => a < b,
+            IntCmp::Le => a <= b,
+            IntCmp::Gt => a > b,
+            IntCmp::Ge => a >= b,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum FilterNode {
     // --- Int comparisons (var op literal) ---
@@ -323,6 +349,24 @@ pub enum FilterNode {
     BoolVar { idx: usize },
     /// A boolean literal — `true` or `false`.
     BoolLiteral { val: bool },
+
+    // --- Comprehension / exists ---
+    /// `list.exists(x, x > 5)` — iterate int list, check int condition.
+    ExistsIntList {
+        /// Index of the collection (list of ints) variable.
+        collection_idx: usize,
+        /// Each element is compared against this value.
+        cmp_val: i64,
+        /// Comparison operator.
+        cmp: IntCmp,
+    },
+    /// `list.exists(x, x == "val")` — iterate string list, check string equality.
+    ExistsStrEq {
+        /// Index of the collection (list of strings) variable.
+        collection_idx: usize,
+        /// String value to compare each element against.
+        cmp_val: String,
+    },
 
     // --- Logic combinators ---
     And(Box<FilterNode>, Box<FilterNode>),
@@ -539,6 +583,30 @@ impl FilterNode {
                 Value::Bool(b) => *b,
                 _ => false,
             },
+
+            // ── Exists / comprehension ──
+            Self::ExistsIntList { collection_idx, cmp_val, cmp } => {
+                match &vars[*collection_idx] {
+                    Value::List(list) => {
+                        list.iter().any(|item| match item {
+                            Value::Int(i) => cmp.eval(*i, *cmp_val),
+                            _ => false,
+                        })
+                    }
+                    _ => false,
+                }
+            }
+            Self::ExistsStrEq { collection_idx, cmp_val } => {
+                match &vars[*collection_idx] {
+                    Value::List(list) => {
+                        list.iter().any(|item| match item {
+                            Value::String(s) => s.as_ref() == cmp_val.as_str(),
+                            _ => false,
+                        })
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -865,6 +933,30 @@ impl FilterNode {
                 Value::Bool(b) => *b,
                 _ => std::hint::unreachable_unchecked(),
             },
+
+            // ── Exists / comprehension ──
+            Self::ExistsIntList { collection_idx, cmp_val, cmp } => {
+                match vars.get_unchecked(*collection_idx) {
+                    Value::List(list) => {
+                        list.iter().any(|item| match item {
+                            Value::Int(i) => cmp.eval(*i, *cmp_val),
+                            _ => false,
+                        })
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
+            Self::ExistsStrEq { collection_idx, cmp_val } => {
+                match vars.get_unchecked(*collection_idx) {
+                    Value::List(list) => {
+                        list.iter().any(|item| match item {
+                            Value::String(s) => s.as_ref() == cmp_val.as_str(),
+                            _ => false,
+                        })
+                    }
+                    _ => std::hint::unreachable_unchecked(),
+                }
+            }
         }
     }
 
@@ -1021,6 +1113,11 @@ impl FilterNode {
             // ── Boolean variable / literal (encoded as i64 0/1 in ints array) ──
             Self::BoolLiteral { val } => *val,
             Self::BoolVar { idx } => *ints.get_unchecked(*idx) != 0,
+
+            // ── Exists / comprehension (requires Value array — not callable from typed path) ──
+            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. } => {
+                std::hint::unreachable_unchecked()
+            }
         }
     }
 
@@ -1064,6 +1161,9 @@ impl FilterNode {
 
             // Boolean variable / literal — cheap (register read + int-to-bool)
             Self::BoolVar { .. } | Self::BoolLiteral { .. } => 1,
+
+            // Exists / comprehension — O(N) iteration
+            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. } => 100,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),

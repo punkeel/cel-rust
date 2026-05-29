@@ -203,7 +203,18 @@ impl EvalContext {
     /// (lists, maps, bytes, etc.).
     #[inline]
     pub fn set(&mut self, field: Field, value: Value) {
-        self.values[field.0 as usize] = value;
+        let idx = field.0 as usize;
+        // Keep typed arrays in sync for fast-path evaluation
+        match &value {
+            Value::Bool(b) => self.ints[idx] = if *b { 1 } else { 0 },
+            Value::Int(i) => self.ints[idx] = *i,
+            Value::UInt(u) => self.ints[idx] = *u as i64,
+            Value::String(s) => {
+                self.strings[idx] = Arc::clone(s);
+            }
+            _ => {}
+        }
+        self.values[idx] = value;
     }
 
     /// Set an integer field. O(1).
@@ -228,7 +239,9 @@ impl EvalContext {
     /// Set a boolean field. O(1).
     #[inline]
     pub fn set_bool(&mut self, field: Field, val: bool) {
-        self.values[field.0 as usize] = Value::Bool(val);
+        let idx = field.0 as usize;
+        self.values[idx] = Value::Bool(val);
+        self.ints[idx] = if val { 1 } else { 0 };
     }
 
     /// Set a string field from a `&str`. O(1) + Arc allocation on first
