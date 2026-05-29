@@ -424,10 +424,10 @@ pub enum FilterNode {
         cmp: IntCmp,
     },
 
-    // --- Pre-resolved function call comparison ---
+    // --- Pre-resolved function call ---
     /// `func_name(arg_idxs...) cmp_op literal` — pre-resolved function from FnTable,
     /// called at eval time, result compared against a literal.
-    FnCallCmp {
+    FnCall {
         /// Pre-resolved function pointer.
         func: FnCallPtr,
         /// Indices of argument variables.
@@ -726,7 +726,7 @@ impl FilterNode {
                 }
             }
             // ── Pre-resolved function call result ──
-            Self::FnCallCmp { func, arg_idxs, cmp, literal } => {
+            Self::FnCall { func, arg_idxs, cmp, literal } => {
                 let mut args = [Value::Null, Value::Null, Value::Null];
                 for (i, &idx) in arg_idxs.iter().enumerate() {
                     if i >= 3 { break; }
@@ -1136,7 +1136,7 @@ impl FilterNode {
                 }
             }
             // ── Pre-resolved function call result ──
-            Self::FnCallCmp { func, arg_idxs, cmp, literal } => {
+            Self::FnCall { func, arg_idxs, cmp, literal } => {
                 let mut args = [Value::Null, Value::Null, Value::Null];
                 for (i, &idx) in arg_idxs.iter().enumerate() {
                     if i >= 3 { break; }
@@ -1308,7 +1308,7 @@ impl FilterNode {
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
             | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. }
-            | Self::FnCallCmp { .. } => {
+            | Self::FnCall { .. } => {
                 std::hint::unreachable_unchecked()
             }
         }
@@ -1359,7 +1359,7 @@ impl FilterNode {
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
             | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => 100,
-            | Self::FnCallCmp { .. } => 80,
+            | Self::FnCall { .. } => 80,
 
             // Recursive: sum of children
             Self::And(a, b) | Self::Or(a, b) => a.cost().saturating_add(b.cost()),
@@ -1374,7 +1374,7 @@ impl FilterNode {
             Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
             | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
             | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. }
-            | Self::FnCallCmp { .. } => true,
+            | Self::FnCall { .. } => true,
             Self::And(a, b) | Self::Or(a, b) => a.needs_values() || b.needs_values(),
             Self::Not(inner) => inner.needs_values(),
             _ => false,

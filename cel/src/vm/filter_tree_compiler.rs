@@ -528,7 +528,7 @@ fn compile_closure_bool(node: &FilterNode) -> CompiledExpr {
         FilterNode::ExistsIntList { .. } | FilterNode::ExistsStrEq { .. }
         | FilterNode::ExistsIntSet { .. } | FilterNode::ExistsMapInt { .. }
         | FilterNode::MapIndexStrEq { .. } | FilterNode::MapIndexIntList { .. }
-        | FilterNode::FnCallCmp { .. } => Box::new(|_, _| false),
+        | FilterNode::FnCall { .. } => Box::new(|_, _| false),
     })
 }
 
@@ -906,7 +906,7 @@ fn try_compile_fn_call_int_cmp(
         operators::GREATER_EQUALS => crate::vm::filter_tree::IntCmp::Ge,
         _ => return None,
     };
-    Some(Box::new(FilterNode::FnCallCmp {
+    Some(Box::new(FilterNode::FnCall {
         func: FnCallPtr(Arc::clone(func)),
         arg_idxs,
         cmp,
