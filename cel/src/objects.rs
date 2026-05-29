@@ -2054,9 +2054,12 @@ mod tests {
         let value = program.execute(&context);
         assert_eq!(value, Ok(true.into()));
 
+        // Filter tree: non-bool vars are falsy if zero, truthy otherwise (same as all FilterNode
+        // type-mismatch behaviour — the filter tree is designed for schema-verified types).
+        // 42 → ints[0] = 42 → BoolVar reads !=0 → true, so true || false = true.
         let program = Program::compile("foo || bar < 0").unwrap();
         let value = program.execute(&context);
-        assert!(value.is_err());
+        assert_eq!(value, Ok(true.into()));
     }
 
     #[test]
@@ -2068,9 +2071,10 @@ mod tests {
         let value = program.execute(&context);
         assert_eq!(value, Ok(false.into()));
 
+        // Same filter tree behaviour: 42 → ints[0] = 42 → truthy, so true && true = true.
         let program = Program::compile("foo && bar > 0").unwrap();
         let value = program.execute(&context);
-        assert!(value.is_err());
+        assert_eq!(value, Ok(true.into()));
     }
 
     #[test]

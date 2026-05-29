@@ -640,6 +640,11 @@ fn compile_expr(ctx: &mut FilterCtx, expr: &Expr) -> Result<Box<FilterNode>, Str
         Expr::Literal(LiteralValue::Boolean(b)) => {
             Ok(Box::new(FilterNode::BoolLiteral { val: *b.inner() }))
         }
+        // ── Boolean variable: `is_admin` (filter tree design assumes schema-verified types) ──
+        Expr::Ident(name) => {
+            let idx = ctx.var_idx(name);
+            Ok(Box::new(FilterNode::BoolVar { idx }))
+        }
         Expr::Call(call) => {
             let name = call.func_name.as_str();
 
