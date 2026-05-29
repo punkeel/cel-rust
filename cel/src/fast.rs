@@ -413,8 +413,8 @@ impl Filter {
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
         if self.tree.needs_values {
-            // Exists/MapIndex variants need Value arrays (map lookups, list iteration).
-            unsafe { self.tree.filter.eval_fast(ctx.as_slice()) }
+            // Per-node path selection: BoolVar via ints, Exists via values.
+            unsafe { self.tree.filter.eval_mixed(ctx.ints(), ctx.strings(), ctx.as_slice()) }
         } else {
             self.tree.compiled.eval_bool(ctx.ints(), ctx.strings())
         }

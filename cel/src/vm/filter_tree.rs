@@ -1394,6 +1394,38 @@ impl FilterNode {
         }
     }
 
+    /// Evaluate using the fastest path per-node. Picks `eval_fast_typed` for simple
+    /// nodes and `eval_fast` for nodes that need the Value array (Exists, MapIndex, FnCall).
+    /// Eliminates the closure fallback — every leaf gets its real evaluator.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`eval_fast`] — caller must guarantee bounds and type correctness.
+    #[inline(always)]
+    pub unsafe fn eval_mixed(
+        &self,
+        ints: &[i64],
+        strings: &[std::sync::Arc<str>],
+        vars: &[Value],
+    ) -> bool {
+        match self {
+            Self::And(a, b) => {
+                a.eval_mixed(ints, strings, vars) && b.eval_mixed(ints, strings, vars)
+            }
+            Self::Or(a, b) => {
+                a.eval_mixed(ints, strings, vars) || b.eval_mixed(ints, strings, vars)
+            }
+            Self::Not(inner) => !inner.eval_mixed(ints, strings, vars),
+            node => {
+                if node.needs_values() {
+                    node.eval_fast(vars)
+                } else {
+                    node.eval_fast_typed(ints, strings)
+                }
+            }
+        }
+    }
+
     /// Reorder AND/OR branches so cheaper expression evaluates first.
     /// Maximizes short-circuit benefit: AND skips right if left is false,
     /// OR skips right if left is true — so the cheap check should go first.

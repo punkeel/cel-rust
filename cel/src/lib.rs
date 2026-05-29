@@ -236,7 +236,7 @@ impl Program {
             }
             if all_declared {
                 if tree.needs_values {
-                    // Exists/MapIndex variants need Value arrays.
+                    // Use Value array for Exists/MapIndex/FnCall variants.
                     let vars = tree.bind_vars(context);
                     return Ok(Value::Bool(unsafe { tree.filter.eval_fast(&vars) }));
                 } else {
