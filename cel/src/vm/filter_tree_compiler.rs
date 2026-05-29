@@ -97,6 +97,9 @@ pub struct CompiledFilterTree {
     pub filter: Box<FilterNode>,
     pub compiled: CompiledExpr,
     pub var_names: Vec<String>,
+    /// True when the tree contains Exists/MapIndex variants that need Value arrays
+    /// (map lookups, list iteration) instead of typed i64/Arc<str> arrays.
+    pub needs_values: bool,
 }
 
 impl fmt::Debug for CompiledFilterTree {
@@ -540,16 +543,18 @@ pub fn compile_filter_tree_with_schema(
     let mut ctx = FilterCtx::with_schema(field_names);
     let mut filter = compile_expr(&mut ctx, &expr.expr)?;
     filter.optimize_order();
+    let needs_values = filter.needs_values();
     let compiled = compile_closure(&filter);
-    Ok(CompiledFilterTree { filter, compiled, var_names: ctx.var_names })
+    Ok(CompiledFilterTree { filter, compiled, var_names: ctx.var_names, needs_values })
 }
 
 pub fn compile_filter_tree(expr: &Expression) -> Result<CompiledFilterTree, String> {
     let mut ctx = FilterCtx::new();
     let mut filter = compile_expr(&mut ctx, &expr.expr)?;
     filter.optimize_order();
+    let needs_values = filter.needs_values();
     let compiled = compile_closure(&filter);
-    Ok(CompiledFilterTree { filter, compiled, var_names: ctx.var_names })
+    Ok(CompiledFilterTree { filter, compiled, var_names: ctx.var_names, needs_values })
 }
 
 struct FilterCtx {

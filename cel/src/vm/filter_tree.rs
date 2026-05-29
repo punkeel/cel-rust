@@ -1309,6 +1309,19 @@ impl FilterNode {
         }
     }
 
+    /// Whether this node requires Value array access (map lookups, list iteration).
+    /// When true, the typed i64/Arc<str> path cannot be used for this node.
+    pub fn needs_values(&self) -> bool {
+        match self {
+            Self::ExistsIntList { .. } | Self::ExistsStrEq { .. }
+            | Self::ExistsIntSet { .. } | Self::ExistsMapInt { .. }
+            | Self::MapIndexStrEq { .. } | Self::MapIndexIntList { .. } => true,
+            Self::And(a, b) | Self::Or(a, b) => a.needs_values() || b.needs_values(),
+            Self::Not(inner) => inner.needs_values(),
+            _ => false,
+        }
+    }
+
     /// Reorder AND/OR branches so cheaper expression evaluates first.
     /// Maximizes short-circuit benefit: AND skips right if left is false,
     /// OR skips right if left is true — so the cheap check should go first.

@@ -411,7 +411,12 @@ impl Filter {
     /// Evaluate and return a `bool` directly.
     #[inline(always)]
     pub fn eval_bool(&self, ctx: &EvalContext) -> bool {
-        self.tree.compiled.eval_bool(ctx.ints(), ctx.strings())
+        if self.tree.needs_values {
+            // Exists/MapIndex variants need Value arrays (map lookups, list iteration).
+            unsafe { self.tree.filter.eval_fast(ctx.as_slice()) }
+        } else {
+            self.tree.compiled.eval_bool(ctx.ints(), ctx.strings())
+        }
     }
 
     /// Variable names referenced by this filter, in index order.
