@@ -238,7 +238,7 @@ impl Program {
                 if tree.needs_values {
                     // Use Value array for Exists/MapIndex/FnCall variants.
                     let vars = tree.bind_vars(context);
-                    return Ok(Value::Bool(unsafe { tree.filter.eval_fast(&vars) }));
+                    return Ok(Value::Bool(tree.filter.eval(&vars)));
                 } else {
                     let (ints, strings) = tree.bind_typed(context);
                     return tree.compiled.eval_value(&ints, &strings);
